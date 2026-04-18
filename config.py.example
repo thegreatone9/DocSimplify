@@ -1,0 +1,56 @@
+"""
+Shared configuration for the Book Simplifier pipeline.
+All paths, model settings, and tunable parameters live here.
+
+Copy this file to config.py and fill in your API keys.
+"""
+
+from pathlib import Path
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).parent
+DATA_DIR     = PROJECT_ROOT / "data"
+INPUT_DIR    = DATA_DIR / "input"
+INTERMEDIATE_DIR = DATA_DIR / "intermediate"
+OUTPUT_DIR   = DATA_DIR / "output"
+
+# Intermediate file names (produced & consumed between notebooks)
+BOOK_STRUCTURE_FILE = INTERMEDIATE_DIR / "book_structure.json"
+CHUNKS_FILE         = INTERMEDIATE_DIR / "chunks.json"
+GLOSSARY_FILE       = INTERMEDIATE_DIR / "glossary.json"
+BOOK_SUMMARY_FILE   = INTERMEDIATE_DIR / "book_summary.txt"
+SIMPLIFIED_CHUNKS_FILE = INTERMEDIATE_DIR / "simplified_chunks.json"
+CHECKPOINT_FILE     = INTERMEDIATE_DIR / "checkpoint.json"
+
+# ── Ollama / Model Settings ───────────────────────────────────────────────────
+OLLAMA_BASE_URL = "http://localhost:11434"
+MODEL_NAME      = "qwen2.5:7b"       # Best balance of speed + quality on Mac
+# Alternatives:  "mistral:7b", "gemma2:9b", "phi3:mini" (3.8B, faster but lower quality)
+
+# ── Gemini API Settings ──────────────────────────────────────────────────────
+GEMINI_API_KEY  = ""                  # Get free key: https://aistudio.google.com/apikey
+GEMINI_MODEL    = "gemini-2.0-flash"  # 2.0-flash: ~1500 req/day free tier
+
+# ── Groq API Settings ────────────────────────────────────────────────────────
+GROQ_API_KEY    = ""                  # Get free key: https://console.groq.com/keys
+GROQ_MODEL      = "llama-3.1-8b-instant"     # 14K req/day free tier (use with --paragraph)
+                                               # Alt: "llama-3.3-70b-versatile" (1K req/day, better quality)
+
+# ── Chunking Settings ─────────────────────────────────────────────────────────
+MAX_CHUNK_TOKENS    = 2000   # Smaller chunks = better quality per chunk
+OVERLAP_TOKENS      = 200    # Trailing overlap for continuity
+APPROX_CHARS_PER_TOKEN = 4   # Rough estimate; 1 token ≈ 4 chars in English
+
+# ── Simplification Settings ───────────────────────────────────────────────────
+TEMPERATURE         = 0.3    # Low = more faithful to original; higher = more creative
+VERIFY_CHUNKS       = True   # Run a verification pass to catch info loss (adds ~50% time)
+
+# ── Retry Settings ────────────────────────────────────────────────────────────
+MIN_ACCEPTABLE_RATIO = 0.85  # Minimum simplified/original word ratio before retry
+MAX_ACCEPTABLE_RATIO = 1.5   # Maximum ratio (catches runaway verbosity)
+MAX_RETRIES          = 2     # How many times to re-prompt if ratio is out of bounds
+
+# ── Parallelism ───────────────────────────────────────────────────────────────
+MAX_WORKERS          = 2     # Concurrent LLM calls (set to 1 for sequential + context)
+# Note: MAX_WORKERS > 1 disables inter-chunk context passing for speed.
+# The book summary + glossary still provide global context for every chunk.

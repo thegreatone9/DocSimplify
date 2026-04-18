@@ -6,5 +6,11 @@ lxml
 tqdm
 requests
 
+# Cloud LLM providers
+google-genai
+
+# Optional: embedding-based quality assurance
+# pip install sentence-transformers
+
 # Optional: neural layout detection for scanned/image-heavy PDFs
 # pip install surya-ocr "transformers<5.0"
