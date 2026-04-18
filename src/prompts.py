@@ -1,7 +1,7 @@
 """
 Prompt Templates
 ================
-All LLM prompts live here — simplification, verification, glossary extraction,
+All LLM prompts live here - simplification, verification, glossary extraction,
 and book summary generation. Centralized so they're easy to iterate on.
 """
 
@@ -23,7 +23,7 @@ def build_simplification_prompt(
         book_summary:     ~500-token overview of the book.
         glossary:         Dict of {term: plain-english definition}.
         previous_context: Brief summary of what came just before this chunk.
-        is_retry:         If True, this is a retry attempt — use even stricter prompt.
+        is_retry:         If True, this is a retry attempt - use even stricter prompt.
 
     Returns:
         Tuple of (system_prompt, user_prompt).
@@ -45,17 +45,17 @@ def build_simplification_prompt(
         glossary_lines = [f"  • {term}: {defn}" for term, defn in glossary.items()]
         glossary_text = "\n".join(glossary_lines)
 
-    system_prompt = f"""You are an expert book editor who rewrites dense, academic texts \
-in plain English without losing ANY information. You rewrite — you do NOT summarize.
+    system_prompt = f"""You are an expert book editor who rewrites dense, academic texts 
+in plain English without losing ANY information. You rewrite - you do NOT summarize.
 
-TARGET AUDIENCE: A high school graduate — intelligent and curious, but not specialized.
+TARGET AUDIENCE: A high school graduate - intelligent and curious, but not specialized.
 
 EXAMPLE:
-Original: "The neoliberal paradigm, predicated on fiscal austerity and market \
-deregulation, has engendered significant macroeconomic volatility in peripheral economies, \
+Original: "The neoliberal paradigm, predicated on fiscal austerity and market 
+deregulation, has engendered significant macroeconomic volatility in peripheral economies, 
 exacerbating extant inequalities in wealth distribution."
-Rewritten: "The economic approach based on cutting government spending and removing market \
-regulations has caused major economic instability in smaller, developing economies. This \
+Rewritten: "The economic approach based on cutting government spending and removing market 
+regulations has caused major economic instability in smaller, developing economies. This 
 has made the existing gaps between rich and poor even worse."
 
 Notice: same information, simpler words, sentences split for clarity, roughly same length.
@@ -78,8 +78,8 @@ WHAT CAME JUST BEFORE THIS PASSAGE:
     retry_warning = ""
     if is_retry:
         retry_warning = """
-⚠️ YOUR PREVIOUS ATTEMPT WAS TOO SHORT. You DROPPED information. This time, go \
-paragraph by paragraph and make sure EVERY point from the original appears in your output. \
+⚠️ YOUR PREVIOUS ATTEMPT WAS TOO SHORT. You DROPPED information. This time, go 
+paragraph by paragraph and make sure EVERY point from the original appears in your output. 
 Your output MUST be at least as many words as the input.
 """
     # Build structural note if numbered items exist
@@ -90,13 +90,13 @@ Your output MUST be at least as many words as the input.
     user_prompt = f"""Rewrite the following passage in plain, clear English for a high school graduate.
 {context_section}{retry_warning}
 RULES:
-1. This is a REWRITE, not a summary. Keep ALL facts, arguments, names, dates, and details. \
+1. This is a REWRITE, not a summary. Keep ALL facts, arguments, names, dates, and details. 
 Your output should be roughly the same length (~{input_word_count} words, {paragraph_count} paragraphs).
-2. Replace jargon with plain language. If a technical term has no simpler equivalent, \
+2. Replace jargon with plain language. If a technical term has no simpler equivalent, 
 briefly explain it in parentheses the first time.
 3. Break long sentences into shorter, clearer ones. Keep the author's meaning and logical flow.
 4. Do NOT add commentary, headings, labels, or new information that isn't in the original.
-5. Output ONLY the rewritten text — nothing else.
+5. Output ONLY the rewritten text - nothing else.
 {structure_note}
 PASSAGE TO SIMPLIFY:
 
@@ -129,32 +129,37 @@ def build_paragraph_prompt(
         glossary_lines = [f"  • {term}: {defn}" for term, defn in glossary.items()]
         glossary_text = "\n".join(glossary_lines)
 
-    system_prompt = f"""You rewrite academic text in plain English. Keep ALL information — \
+    system_prompt = f"""You rewrite dense academic text in plain English. Keep ALL information - 
 rewrite, don't summarize. Match the original length.
 
-CRITICAL: Never write about the text — rewrite IT. Never start with phrases like \
-"The passage argues", "The text discusses", "The author states", "This paragraph explains". \
-Write as if YOU are the author making the same points in simpler words.
+TARGET AUDIENCE: A high school graduate - intelligent and curious, but not specialized.
+
+CRITICAL RULES:
+1. Never write about the text - rewrite IT. Never start with phrases like "The passage argues", 
+"The author states", etc. Write as if YOU are the author making the same points.
+2. Replace complex jargon with everyday equivalents.
+3. Break long, convoluted sentences into shorter, punchy ones. Use active voice.
 
 EXAMPLE:
-Original: "The neoliberal paradigm, predicated on fiscal austerity, has exacerbated \
+Original: "The neoliberal paradigm, predicated on fiscal austerity, has exacerbated 
 extant inequalities."
-Rewritten: "The economic approach based on cutting government spending has made existing \
+Rewritten: "The economic approach based on cutting government spending has made existing 
 inequalities worse."
 
 BOOK CONTEXT: {book_summary[:500]}
 
-GLOSSARY:
+GLOSSARY (Use these definitions for key terms):
 {glossary_text if glossary_text else "(none)"}"""
 
     context_line = ""
     if previous_context:
-        context_line = f"\nCONTEXT: {previous_context}\n"
+        context_line = f"\nCONTEXT (What came right before this): {previous_context}\n"
 
     word_count = len(paragraph_text.split())
 
-    user_prompt = f"""Rewrite this paragraph in plain English (~{word_count} words). \
-Keep all facts. Do NOT summarize or comment on the text — rewrite it directly. \
+    user_prompt = f"""Rewrite this paragraph in plain English (~{word_count} words). 
+Target a high school reading level. Use simple vocabulary and short sentences. 
+Keep all facts. Do NOT summarize or comment on the text - rewrite it directly. 
 Output ONLY the rewritten text.
 {context_line}
 {paragraph_text}"""
@@ -175,8 +180,8 @@ def build_bridge_summary_prompt(simplified_text: str) -> tuple[str, str]:
     """
     system_prompt = "You write brief summaries to maintain continuity between text sections."
 
-    user_prompt = f"""Summarize the following passage in exactly 2 sentences. \
-Focus on the main argument and any key terms introduced. \
+    user_prompt = f"""Summarize the following passage in exactly 2 sentences. 
+Focus on the main argument and any key terms introduced. 
 This summary will be used as context for the next section.
 
 {simplified_text[-1500:]}"""
@@ -197,13 +202,15 @@ def build_smoothing_prompt(simplified_text: str) -> tuple[str, str]:
     """
     word_count = len(simplified_text.split())
 
-    system_prompt = """You are an editor who harmonizes tone and style. \
-You do NOT change the content, facts, or meaning. You only make the voice \
-consistent throughout — same level of formality, same use of contractions, \
-smooth transitions between paragraphs."""
+    system_prompt = (
+        "You are an editor who harmonizes tone and style. "
+        "You do NOT change the content, facts, or meaning. You only make the voice "
+        "consistent throughout - same level of formality, same use of contractions, "
+        "smooth transitions between paragraphs."
+    )
 
-    user_prompt = f"""Polish the following text for consistent tone and smooth transitions. \
-Do NOT add, remove, or change any facts. Keep the same length (~{word_count} words). \
+    user_prompt = f"""Polish the following text for consistent tone and smooth transitions. 
+Do NOT add, remove, or change any facts. Keep the same length (~{word_count} words). 
 Output ONLY the polished text.
 
 {simplified_text}"""
@@ -225,20 +232,18 @@ def build_verification_prompt(
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a meticulous fact-checker and editor. Your job is to compare \
-an original text with its simplified version and identify ANY information that was lost, \
+    system_prompt = """You are a meticulous fact-checker and editor. Your job is to compare 
+an original text with its simplified version and identify ANY information that was lost, 
 altered, or fabricated during simplification."""
 
     user_prompt = f"""Compare the ORIGINAL text with its SIMPLIFIED version below.
 
 List any of the following issues you find:
-1. DROPPED — Facts, arguments, data points, or details present in the original but missing \
-from the simplified version.
-2. ALTERED — Meaning that was changed, distorted, or over-generalized in the simplified version.
-3. HALLUCINATED — New information, claims, or examples in the simplified version that do NOT \
-appear in the original.
+1. DROPPED - Facts, arguments, data points, or details present in the original but missing from the simplified version.
+2. ALTERED - Meaning that was changed, distorted, or over-generalized in the simplified version.
+3. HALLUCINATED - New information, claims, or examples in the simplified version that do NOT appear in the original.
 
-If there are NO issues and all information is preserved, respond with exactly: "ALL PRESERVED — no issues found."
+If there are NO issues and all information is preserved, respond with exactly: "ALL PRESERVED - no issues found."
 
 ORIGINAL:
 {original_text}
@@ -256,23 +261,26 @@ def build_glossary_prompt(text_sample: str) -> tuple[str, str]:
     Build prompts to extract key terms/jargon from a text sample.
 
     Args:
-        text_sample: A representative sample of the book's text (~3000 tokens).
+        text_sample: A representative sample of the book text (~3000 tokens).
 
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a vocabulary analyst. You identify specialized, technical, \
-or unusual words and phrases in a text and provide clear, plain-English definitions that \
-a high school graduate would understand."""
+    system_prompt = (
+        "You are a vocabulary analyst. You identify specialized, technical, "
+        "or unusual words and phrases in a text and provide clear, plain-English definitions that "
+        "a high school graduate would understand."
+    )
 
-    user_prompt = f"""Read the following text sample from a book. Identify ALL specialized \
-terms, jargon, academic vocabulary, and unusual phrases that a typical high school graduate \
+    user_prompt = f"""Read the following text sample from a book. Identify ALL specialized
+terms, jargon, academic vocabulary, and unusual phrases that a typical high school graduate
 might not immediately understand.
+
 
 For each term, provide a brief, clear, plain-English definition (1 sentence max).
 
 Format your response as a JSON object where keys are terms and values are definitions.
-Example: {{"epistemology": "The study of knowledge — how we know what we know", \
+Example: {{"epistemology": "The study of knowledge - how we know what we know", 
 "ontological": "Related to the nature of existence and what it means for something to be real"}}
 
 Return ONLY the JSON object, no other text.
@@ -293,11 +301,11 @@ def build_summary_prompt(chapter_intros: str) -> tuple[str, str]:
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a skilled book analyst. You read introductory passages from \
-each chapter of a book and produce a concise, accurate overview of the book's topic, \
+    system_prompt = """You are a skilled book analyst. You read introductory passages from 
+each chapter of a book and produce a concise, accurate overview of the book's topic, 
 purpose, and main themes."""
 
-    user_prompt = f"""Below are the opening passages from each chapter of a book. Based on \
+    user_prompt = f"""Below are the opening passages from each chapter of a book. Based on 
 these excerpts, write a concise overview (about 300-500 words) that describes:
 
 1. What this book is about (main topic/subject)
@@ -305,7 +313,7 @@ these excerpts, write a concise overview (about 300-500 words) that describes:
 3. The main themes or arguments the book explores
 4. The overall structure or progression of ideas
 
-Write in clear, plain English. This summary will be used to provide context when \
+Write in clear, plain English. This summary will be used to provide context when 
 simplifying individual sections of the book.
 
 Output ONLY the summary, no other text.
@@ -328,15 +336,15 @@ def build_chapter_transition_summary(
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a concise summarizer. You produce brief, accurate summaries \
+    system_prompt = """You are a concise summarizer. You produce brief, accurate summaries 
 of book chapters to maintain reading continuity."""
 
     # Only use the last portion if the chapter is very long
     max_chars = 6000
     text = previous_chapter_text[-max_chars:] if len(previous_chapter_text) > max_chars else previous_chapter_text
 
-    user_prompt = f"""Summarize the following chapter text in 2-3 sentences. Focus on the \
-key points, arguments, or events. This summary will be provided as context when simplifying \
+    user_prompt = f"""Summarize the following chapter text in 2-3 sentences. Focus on the 
+key points, arguments, or events. This summary will be provided as context when simplifying 
 the next chapter.
 
 Output ONLY the summary, no other text.
@@ -359,25 +367,25 @@ def build_footnote_prompt(simplified_text: str) -> tuple[str, str]:
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are an expert educator. You read text and identify every term, \
-name, concept, or reference that a typical high school graduate might not know. For each, \
+    system_prompt = """You are an expert educator. You read text and identify every term, 
+name, concept, or reference that a typical high school graduate might not know. For each, 
 you provide a brief, clear, 1-sentence explanation from your own knowledge."""
 
-    user_prompt = f"""Read the following passage. Identify every word, name, phrase, concept, \
+    user_prompt = f"""Read the following passage. Identify every word, name, phrase, concept, 
 or reference that a typical high school graduate might NOT immediately understand.
 
-For each term, provide a concise 1-sentence explanation using your own knowledge. \
-Be selective — only flag terms that genuinely need explanation. Skip common words, \
+For each term, provide a concise 1-sentence explanation using your own knowledge. 
+Be selective - only flag terms that genuinely need explanation. Skip common words, 
 basic concepts, and terms already explained inline in the text.
 
-Return ONLY a JSON object where keys are the exact term/phrase as it appears in the text \
+Return ONLY a JSON object where keys are the exact term/phrase as it appears in the text 
 and values are the 1-sentence explanation.
 
 If there are NO difficult terms, return exactly: {{}}
 
 Example output:
-{{"utilitarianism": "A philosophy that says the best action is the one that produces the most overall happiness.", \
-"John Rawls": "An American philosopher (1921–2002) who wrote influential works on justice and fairness."}}
+{{"utilitarianism": "A philosophy that says the best action is the one that produces the most overall happiness.", 
+"John Rawls": "An American philosopher (1921-2002) who wrote influential works on justice and fairness."}}
 
 TEXT TO ANALYZE:
 

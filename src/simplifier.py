@@ -444,8 +444,12 @@ def _simplify_one_chunk_paragraphs(
     simplified_text = "\n\n".join(simplified_paragraphs)
     simplified_text = _clean_llm_output(simplified_text, original_text=chunk["text"])
 
-    # Smoothing pass: harmonize tone across paragraphs
-    if len(simplified_paragraphs) > 1 and len(simplified_text.split()) > 20:
+    # Realign paragraph structure to match input
+    simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
+
+    # Smoothing pass: harmonize tone AFTER realignment
+    realigned_paras = [p.strip() for p in simplified_text.split("\n\n") if p.strip()]
+    if len(realigned_paras) >= 1 and len(simplified_text.split()) > 20:
         try:
             sys_prompt, usr_prompt = build_smoothing_prompt(simplified_text)
             smoothed = llm.generate(
@@ -460,9 +464,6 @@ def _simplify_one_chunk_paragraphs(
                 simplified_text = smoothed
         except Exception as e:
             print(f"\n     ℹ️  Smoothing skipped: {str(e)[:80]}")
-
-    # Realign paragraph structure to match input
-    simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
 
     simplified_word_count = len(simplified_text.split())
     ratio = simplified_word_count / original_word_count if original_word_count > 0 else 1.0
