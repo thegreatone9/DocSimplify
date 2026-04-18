@@ -1,0 +1,10 @@
+pymupdf
+pymupdf4llm
+ebooklib
+beautifulsoup4
+lxml
+tqdm
+requests
+
+# Optional: neural layout detection for scanned/image-heavy PDFs
+# pip install surya-ocr "transformers<5.0"
