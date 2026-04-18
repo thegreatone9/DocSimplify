@@ -465,6 +465,9 @@ def _simplify_one_chunk_paragraphs(
         except Exception as e:
             print(f"\n     ℹ️  Smoothing skipped: {str(e)[:80]}")
 
+    # Re-realign in case the smoothing LLM re-split paragraphs
+    simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
+
     simplified_word_count = len(simplified_text.split())
     ratio = simplified_word_count / original_word_count if original_word_count > 0 else 1.0
 

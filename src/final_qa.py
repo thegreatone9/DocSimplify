@@ -51,10 +51,14 @@ def run_final_qa(markdown: str) -> dict:
     fixed, meta_fixes = _fix_meta_summaries(fixed)
     issues.extend(meta_fixes)
 
-    # ── 5. Clean up excessive blank lines ────────────────────────────────────
+    # ── 5. Remove repeated sentences within paragraphs ───────────────────────
+    fixed, repeat_fixes = _fix_repeated_sentences(fixed)
+    issues.extend(repeat_fixes)
+
+    # ── 6. Clean up excessive blank lines ────────────────────────────────────
     fixed = re.sub(r"\n{4,}", "\n\n\n", fixed)
 
-    # ── 6. Remove orphaned horizontal rules (--- with nothing after) ─────────
+    # ── 7. Remove orphaned horizontal rules (--- with nothing after) ─────────
     fixed = re.sub(r"\n---\n\n---\n", "\n---\n", fixed)
 
     return {
@@ -248,3 +252,82 @@ def _fix_meta_summaries(text: str) -> tuple[str, list[str]]:
         cleaned.append(para)
 
     return "\n\n".join(cleaned), issues
+
+
+def _sentence_word_set(sentence: str) -> set:
+    """Extract a set of meaningful words from a sentence (lowercased, no punctuation)."""
+    words = re.sub(r'[^\w\s]', '', sentence.lower()).split()
+    # Remove very common words to focus on content overlap
+    stop = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for',
+            'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'that',
+            'this', 'it', 'its', 'and', 'or', 'but', 'not', 'no', 'if', 'so',
+            'than', 'too', 'very', 'just', 'also'}
+    return {w for w in words if w not in stop and len(w) > 2}
+
+
+def _fix_repeated_sentences(text: str) -> tuple[str, list[str]]:
+    """
+    Remove sentences within paragraphs that repeat information already stated
+    in a nearby sentence (within 3 sentences).
+
+    Uses word overlap to detect semantic repetition without LLM calls.
+    Two sentences with >60% content word overlap are considered repetitive.
+    """
+    paragraphs = text.split("\n\n")
+    cleaned_paragraphs = []
+    issues = []
+
+    for para in paragraphs:
+        stripped = para.strip()
+
+        # Skip headings, footnotes, short items
+        if not stripped or stripped.startswith("#") or stripped.startswith("[^") or stripped == "---":
+            cleaned_paragraphs.append(para)
+            continue
+
+        # Split into sentences (rough but effective)
+        sentences = re.split(r'(?<=[.!?])\s+', stripped)
+
+        if len(sentences) <= 1:
+            cleaned_paragraphs.append(para)
+            continue
+
+        kept = [sentences[0]]
+        kept_word_sets = [_sentence_word_set(sentences[0])]
+
+        for i in range(1, len(sentences)):
+            current_words = _sentence_word_set(sentences[i])
+
+            if len(current_words) < 3:
+                # Too short to judge, keep it
+                kept.append(sentences[i])
+                kept_word_sets.append(current_words)
+                continue
+
+            # Check against the last 3 kept sentences
+            is_repeat = False
+            for j in range(max(0, len(kept) - 3), len(kept)):
+                prev_words = kept_word_sets[j]
+                if len(prev_words) < 3:
+                    continue
+
+                # Calculate word overlap
+                overlap = current_words & prev_words
+                # Overlap relative to the smaller sentence
+                smaller = min(len(current_words), len(prev_words))
+                if smaller > 0 and len(overlap) / smaller >= 0.6:
+                    is_repeat = True
+                    issues.append(
+                        f"Removed repeated sentence: '{sentences[i][:70]}...'"
+                    )
+                    break
+
+            if not is_repeat:
+                kept.append(sentences[i])
+                kept_word_sets.append(current_words)
+
+        cleaned_paragraphs.append(" ".join(kept))
+
+    return "\n\n".join(cleaned_paragraphs), issues

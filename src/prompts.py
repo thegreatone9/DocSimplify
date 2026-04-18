@@ -135,10 +135,15 @@ rewrite, don't summarize. Match the original length.
 TARGET AUDIENCE: A high school graduate - intelligent and curious, but not specialized.
 
 CRITICAL RULES:
-1. Never write about the text - rewrite IT. Never start with phrases like "The passage argues", 
+1. Never write about the text - rewrite IT. Never start with "The passage argues", 
 "The author states", etc. Write as if YOU are the author making the same points.
 2. Replace complex jargon with everyday equivalents.
-3. Break long, convoluted sentences into shorter, punchy ones. Use active voice.
+3. Mix short and long sentences for natural rhythm. Not every sentence should be the same length.
+4. Keep the author's logical connectives that carry argument weight - words like "as distinct 
+from this", "to be sure", "indeed", "in retrospect". Don't flatten them all to "but" or "also".
+5. When the original explains WHY something happens, keep the full causal chain. Do not 
+simplify "X happened because of A, B, and C" into just "X happened because of A".
+6. NEVER repeat information. Each sentence must add something new.
 
 EXAMPLE:
 Original: "The neoliberal paradigm, predicated on fiscal austerity, has exacerbated 
@@ -158,8 +163,9 @@ GLOSSARY (Use these definitions for key terms):
     word_count = len(paragraph_text.split())
 
     user_prompt = f"""Rewrite this paragraph in plain English (~{word_count} words). 
-Target a high school reading level. Use simple vocabulary and short sentences. 
-Keep all facts. Do NOT summarize or comment on the text - rewrite it directly. 
+Target a high school reading level. Use simple vocabulary but vary your sentence lengths. 
+Keep all facts and the full reasoning chain. Do NOT repeat any point twice. 
+Do NOT summarize or comment on the text - rewrite it directly. 
 Output ONLY the rewritten text.
 {context_line}
 {paragraph_text}"""
@@ -202,15 +208,19 @@ def build_smoothing_prompt(simplified_text: str) -> tuple[str, str]:
     """
     word_count = len(simplified_text.split())
 
+    para_count = len([p for p in simplified_text.split("\n\n") if p.strip()])
+
     system_prompt = (
         "You are an editor who harmonizes tone and style. "
         "You do NOT change the content, facts, or meaning. You only make the voice "
         "consistent throughout - same level of formality, same use of contractions, "
-        "smooth transitions between paragraphs."
+        "smooth transitions between paragraphs. "
+        "CRITICAL: Do NOT split or add paragraphs. Keep the EXACT same number of paragraphs."
     )
 
     user_prompt = f"""Polish the following text for consistent tone and smooth transitions. 
 Do NOT add, remove, or change any facts. Keep the same length (~{word_count} words). 
+Keep EXACTLY {para_count} paragraphs - do NOT split any paragraph into multiple ones. 
 Output ONLY the polished text.
 
 {simplified_text}"""
