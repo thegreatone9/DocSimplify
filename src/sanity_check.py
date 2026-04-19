@@ -216,6 +216,9 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
     # ── Check 6: Table-heavy ──
     _check_table_heavy(full_text, result)
 
+    # ── Check 7: Low prose density (infographics, timelines, posters) ──
+    _check_prose_density(full_text, page_count, result)
+
     return result
 
 
@@ -410,6 +413,63 @@ def _check_table_heavy(text: str, result: SanityResult) -> None:
         result.warnings.append(
             f"Moderate tabular content detected ({table_pct:.0f}% of lines). "
             "Tables may not be preserved well in the simplified output."
+        )
+
+
+def _check_prose_density(text: str, page_count: int, result: SanityResult) -> None:
+    """
+    Detect documents with low prose density — infographics, timelines, posters,
+    slide decks, or visual documents that have text but no real paragraphs.
+
+    Two signals:
+      1. Low words per page (infographics have very sparse text)
+      2. Low prose ratio (most text is short labels, not multi-sentence paragraphs)
+    """
+    if not text or page_count == 0:
+        return
+
+    total_words = len(text.split())
+    avg_words_per_page = total_words / page_count
+
+    result.stats["avg_words_per_page"] = round(avg_words_per_page)
+
+    # Count prose: paragraphs with 3+ sentences (text blocks separated by \n\n)
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    prose_chars = 0
+    for para in paragraphs:
+        # Count sentences (rough: split on . ! ?)
+        sentences = re.split(r'[.!?]+', para)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+        if len(sentences) >= 2:
+            prose_chars += len(para)
+
+    prose_pct = (prose_chars / len(text) * 100) if text else 0
+    result.stats["prose_density_pct"] = round(prose_pct, 1)
+
+    # Check 1: Very low words per page (infographic/poster territory)
+    if avg_words_per_page < 50:
+        result.passed = False
+        result.failures.append(
+            f"VISUAL / INFOGRAPHIC document detected. Only {avg_words_per_page:.0f} words/page "
+            f"on average (threshold: 50). This document is primarily visual content — "
+            "timelines, infographics, posters, or slide decks — with too little prose "
+            "to simplify meaningfully."
+        )
+
+    # Check 2: Low prose density — has text but it's all short labels/captions
+    elif prose_pct < 20 and total_words > 100:
+        result.passed = False
+        result.failures.append(
+            f"LOW PROSE DENSITY. Only {prose_pct:.0f}% of text is in actual paragraphs. "
+            f"The document appears to be mostly short labels, captions, or structured data "
+            "(infographics, slide decks, forms). Our pipeline needs continuous prose to "
+            "simplify effectively."
+        )
+    elif prose_pct < 40:
+        result.warnings.append(
+            f"Moderate prose density ({prose_pct:.0f}%). The document has significant "
+            "non-prose content (labels, captions, structured elements). Some sections "
+            "may not simplify well."
         )
 
 
