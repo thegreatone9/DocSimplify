@@ -27,6 +27,7 @@ SECTION_TYPES = [
     "FOOTNOTES",    # Endnotes, footnotes section
     "APPENDIX",     # Appendices, supplementary material
     "FRONT_MATTER", # Title page, copyright, dedication, etc.
+    "VERBATIM",     # Metadata-like content to preserve as-is (keywords, abstracts, bios)
 ]
 
 
@@ -472,8 +473,12 @@ def _classification_pass(previews_text: str, n: int, llm) -> list[str]:
     user_prompt = f"""Below are previews of {n} consecutive chunks from a document.
 Classify each chunk based ONLY on its visible text content.
 
-CATEGORIES (only these 5):
+CATEGORIES (only these 6):
 - BODY: Main content — arguments, analysis, narrative, discussion (DEFAULT — most chunks are BODY)
+- VERBATIM: Non-prose, structured content that must be preserved exactly as-is: keyword lists,
+  abstracts, author bios, publication info, epigraphs, tables of data, numbered item lists,
+  or any structured/factual content that would be RUINED if rewritten as prose.
+  Use your judgment — if the content's value lies in its exact wording or structure, use VERBATIM.
 - REFERENCES: Bibliography, works cited, or reference list entries
 - FOOTNOTES: Endnotes, footnotes, or numbered annotations
 - APPENDIX: Appendix, supplementary tables, or additional material
@@ -482,12 +487,13 @@ CATEGORIES (only these 5):
 CRITICAL RULES:
 1. Respond with ONLY a JSON array of {n} strings, one per chunk
 2. BODY is the default — when in doubt, use BODY
-3. FRONT_MATTER is only for the first 1-2 chunks — never in the middle
-4. REFERENCES/FOOTNOTES are only at the end — never in the middle
-5. Any chunk with argumentative prose, analysis, or narrative is BODY
+3. VERBATIM is for structured, non-prose content that should NOT be rewritten
+4. FRONT_MATTER is only for the first 1-2 chunks — never in the middle
+5. REFERENCES/FOOTNOTES are only at the end — never in the middle
+6. Any chunk with argumentative prose, analysis, or narrative is BODY
 
 EXAMPLE RESPONSE for 5 chunks:
-["FRONT_MATTER", "BODY", "BODY", "BODY", "REFERENCES"]
+["FRONT_MATTER", "VERBATIM", "BODY", "BODY", "REFERENCES"]
 
 CHUNK PREVIEWS:
 
@@ -532,18 +538,19 @@ def _validation_pass(
     user_prompt = f"""Review the following document structure classification.
 Each chunk has been assigned a label. Check if ANY labels are wrong.
 
-VALID LABELS: BODY, REFERENCES, FOOTNOTES, APPENDIX, FRONT_MATTER
+VALID LABELS: BODY, VERBATIM, REFERENCES, FOOTNOTES, APPENDIX, FRONT_MATTER
 
 COMMON MISTAKES TO CHECK:
 - FRONT_MATTER assigned to a chunk in the middle of the document (should be BODY)
 - BODY assigned to a chunk that is clearly a bibliography/reference list (should be REFERENCES)
+- BODY assigned to a chunk that is just a keyword list, abstract, or structured non-prose data (should be VERBATIM)
 - REFERENCES or FOOTNOTES assigned to a chunk in the middle of the document (suspicious)
 - Any chunk with argumentative prose labeled as non-BODY
 
 RESPONSE FORMAT:
 If ALL labels are correct, respond with: {{"corrections": []}}
 If any labels are wrong, respond with:
-{{"corrections": [{{"chunk": 0, "from": "FRONT_MATTER", "to": "BODY", "reason": "Contains argumentative prose"}}]}}
+{{"corrections": [{{"chunk": 0, "from": "BODY", "to": "VERBATIM", "reason": "Contains only keywords, not prose"}}]}}
 
 CLASSIFICATION TO REVIEW:
 

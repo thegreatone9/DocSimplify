@@ -33,6 +33,10 @@ def extract_pdf_to_markdown(pdf_path: str | Path) -> str:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
+    # Ensure images directory exists for extracted images
+    images_dir = pdf_path.parent.parent / "intermediate" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
     # Try layout-aware extraction first
     try:
         body, footnotes = extract_pdf_with_layout(pdf_path)
@@ -48,8 +52,14 @@ def extract_pdf_to_markdown(pdf_path: str | Path) -> str:
     except Exception as e:
         print(f"  ⚠️  Layout-aware extraction failed ({e}), falling back to pymupdf4llm")
 
-    # Fallback: pymupdf4llm (simpler, no layout awareness)
-    markdown_text = pymupdf4llm.to_markdown(str(pdf_path))
+    # Fallback: pymupdf4llm with image and table extraction
+    markdown_text = pymupdf4llm.to_markdown(
+        str(pdf_path),
+        write_images=True,
+        image_path=str(images_dir),
+        image_format="png",
+        dpi=150,
+    )
     markdown_text = re.sub(r"\n{4,}", "\n\n\n", markdown_text)
     return markdown_text
 

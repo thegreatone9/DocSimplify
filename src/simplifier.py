@@ -30,6 +30,93 @@ from src.prompts import (
 )
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Non-prose element preservation (images, tables, equations)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Regex patterns for non-prose elements in markdown
+_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\([^\)]+\)')          # ![alt](path)
+_TABLE_ROW_RE = re.compile(r'^\|.+\|$', re.MULTILINE)      # |col|col|
+_LATEX_BLOCK_RE = re.compile(r'\$\$[^$]+\$\$', re.DOTALL)  # $$...$$
+_LATEX_INLINE_RE = re.compile(r'(?<!\$)\$(?!\$)[^$]+\$(?!\$)')  # $...$
+
+
+def strip_non_prose_elements(text: str) -> tuple[str, dict[str, str]]:
+    """
+    Replace images, tables, and equations with placeholders.
+
+    Returns:
+        (text_with_placeholders, placeholder_map)
+        where placeholder_map maps "<<IMG_1>>" -> original markdown.
+    """
+    placeholders = {}
+    counter = {"IMG": 0, "TABLE": 0, "EQ": 0}
+
+    # 1. Images: ![alt](path)
+    def _replace_image(m):
+        counter["IMG"] += 1
+        key = f"<<IMG_{counter['IMG']}>>"
+        placeholders[key] = m.group(0)
+        return key
+    text = _IMAGE_RE.sub(_replace_image, text)
+
+    # 2. Tables: consecutive lines starting/ending with |
+    # Find contiguous blocks of table rows (including header separator |---|---|)
+    lines = text.split("\n")
+    table_lines = []
+    in_table = False
+    table_start = -1
+
+    for i, line in enumerate(lines):
+        is_table_line = bool(re.match(r'^\s*\|.*\|\s*$', line))
+        if is_table_line and not in_table:
+            in_table = True
+            table_start = i
+        elif not is_table_line and in_table:
+            # End of table block
+            if i - table_start >= 2:  # At least header + separator
+                table_lines.append((table_start, i))
+            in_table = False
+
+    if in_table and len(lines) - table_start >= 2:
+        table_lines.append((table_start, len(lines)))
+
+    # Replace table blocks from bottom to top (to keep indices valid)
+    for start, end in reversed(table_lines):
+        counter["TABLE"] += 1
+        key = f"<<TABLE_{counter['TABLE']}>>"
+        original = "\n".join(lines[start:end])
+        placeholders[key] = original
+        lines[start:end] = [key]
+
+    text = "\n".join(lines)
+
+    # 3. LaTeX block equations: $$...$$
+    def _replace_block_eq(m):
+        counter["EQ"] += 1
+        key = f"<<EQ_{counter['EQ']}>>"
+        placeholders[key] = m.group(0)
+        return key
+    text = _LATEX_BLOCK_RE.sub(_replace_block_eq, text)
+
+    # 4. LaTeX inline equations: $...$
+    def _replace_inline_eq(m):
+        counter["EQ"] += 1
+        key = f"<<EQ_{counter['EQ']}>>"
+        placeholders[key] = m.group(0)
+        return key
+    text = _LATEX_INLINE_RE.sub(_replace_inline_eq, text)
+
+    return text, placeholders
+
+
+def reinsert_non_prose_elements(text: str, placeholders: dict[str, str]) -> str:
+    """Swap placeholders back with original content."""
+    for key, original in placeholders.items():
+        text = text.replace(key, original)
+    return text
+
+
 def _is_reference_chunk(text: str) -> bool:
     """
     Detect if a chunk is primarily references, bibliography, or endnotes.
@@ -115,7 +202,7 @@ def _simplify_one_chunk(
 
     # Use LLM-based section labels to skip non-body sections
     section_type = chunk.get("section_type", "")
-    passthrough_types = {"TITLE", "SUBTITLE", "AUTHOR", "TOC", "REFERENCES", "FOOTNOTES", "APPENDIX"}
+    passthrough_types = {"FRONT_MATTER", "VERBATIM", "REFERENCES", "FOOTNOTES", "APPENDIX"}
     if section_type in passthrough_types:
         print(f"\n     📚 Skipping {section_type} chunk (pass-through)")
         return {
@@ -135,6 +222,13 @@ def _simplify_one_chunk(
             "was_retried": False,
         }
 
+    # ── Strip non-prose elements (images, tables, equations) ─────────────
+    chunk_text, non_prose_map = strip_non_prose_elements(chunk["text"])
+    if non_prose_map:
+        print(f"     📎 Preserved {len(non_prose_map)} non-prose element(s)")
+
+    original_word_count = len(chunk_text.split())
+
     best_result = ""
     best_ratio = 0.0
     attempts = 0
@@ -144,7 +238,7 @@ def _simplify_one_chunk(
         is_retry = attempt > 1
 
         sys_prompt, usr_prompt = build_simplification_prompt(
-            chunk_text=chunk["text"],
+            chunk_text=chunk_text,
             book_summary=book_summary,
             glossary=glossary,
             previous_context=previous_context,
@@ -176,7 +270,11 @@ def _simplify_one_chunk(
             break  # Acceptable — stop retrying
 
     # Strip any headings/bold labels the LLM invented
-    best_result = _clean_llm_output(best_result, original_text=chunk["text"])
+    best_result = _clean_llm_output(best_result, original_text=chunk_text)
+
+    # ── Reinsert non-prose elements ──────────────────────────────────────
+    if non_prose_map:
+        best_result = reinsert_non_prose_elements(best_result, non_prose_map)
 
     return {
         "simplified_text": best_result,
@@ -474,7 +572,7 @@ def _simplify_one_chunk_paragraphs(
 
     # Use LLM-based section labels to skip non-body sections
     section_type = chunk.get("section_type", "")
-    passthrough_types = {"TITLE", "SUBTITLE", "AUTHOR", "TOC", "REFERENCES", "FOOTNOTES", "APPENDIX"}
+    passthrough_types = {"FRONT_MATTER", "VERBATIM", "REFERENCES", "FOOTNOTES", "APPENDIX"}
     if section_type in passthrough_types:
         print(f"\n     📚 Skipping {section_type} chunk (pass-through)")
         return {
@@ -533,8 +631,19 @@ def _simplify_one_chunk_paragraphs(
             simplified_paragraphs.append(para)
             continue
 
+        # Strip non-prose elements before sending to LLM
+        para_text, para_non_prose = strip_non_prose_elements(para)
+
+        # If the paragraph is entirely non-prose (image-only, table-only), pass through
+        if para_text.strip() == "" or all(c in " \n" for c in para_text.replace("<<", "").replace(">>", "")):
+            simplified_paragraphs.append(para)
+            continue
+
+        if para_non_prose:
+            print(f"       📎 Para {i+1}: preserved {len(para_non_prose)} non-prose element(s)")
+
         sys_prompt, usr_prompt = build_paragraph_prompt(
-            paragraph_text=para,
+            paragraph_text=para_text,
             book_summary=book_summary,
             glossary=glossary,
             previous_context=para_context,
@@ -550,6 +659,9 @@ def _simplify_one_chunk_paragraphs(
             result = result.strip()
             # Remove any meta-labels the model adds (lightweight regex first pass)
             result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
+            # Reinsert non-prose elements
+            if para_non_prose:
+                result = reinsert_non_prose_elements(result, para_non_prose)
             simplified_paragraphs.append(result)
             # Use last simplified paragraph as context for next
             para_context = result[-200:]
