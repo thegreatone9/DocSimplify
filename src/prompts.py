@@ -402,3 +402,61 @@ TEXT TO ANALYZE:
 {simplified_text}"""
 
     return system_prompt, user_prompt
+
+
+def build_concept_map_prompt(full_text: str) -> tuple[str, str]:
+    """
+    Build a prompt to generate a concept map connecting the main ideas
+    in the document.
+
+    Args:
+        full_text: The full simplified document text.
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    system_prompt = (
+        "You are an expert educator who creates clear, visual concept maps "
+        "that show how ideas in a text connect to each other. You help readers "
+        "see the big picture before or after reading."
+    )
+
+    # Use a representative sample if the text is very long
+    max_chars = 8000
+    sample = full_text[:max_chars] if len(full_text) > max_chars else full_text
+
+    user_prompt = f"""Read the following text and create a Mermaid flowchart that connects 
+all the main ideas. Show how each idea leads to, causes, supports, or contrasts 
+with other ideas.
+
+FORMAT RULES:
+1. Output a valid Mermaid flowchart using ```mermaid code block syntax
+2. Use graph TD (top-down direction)
+3. Use short, clear labels inside nodes (max 8 words per node)
+4. Label the arrows with the relationship (e.g., -->|leads to|)
+5. Include 8-15 main concepts, no more
+6. Use different node shapes for different types:
+   - Rounded boxes for main ideas: A(Main Idea)
+   - Rectangles for supporting points: B[Supporting Point]
+   - Diamonds for decisions/tensions: C{{Tension}}
+7. Output ONLY the mermaid code block, no introduction or commentary
+8. Do NOT use special characters like parentheses or quotes inside node labels
+
+EXAMPLE:
+
+```mermaid
+graph TD
+    A(Central Thesis) -->|leads to| B[Idea A]
+    A -->|also causes| C[Idea B]
+    B -->|conflicts with| C
+    B -->|results in| D[Consequence]
+    C -->|supported by| E[Evidence]
+    D -->|which means| F(Conclusion)
+    E -->|challenges| F
+```
+
+TEXT:
+
+{sample}"""
+
+    return system_prompt, user_prompt

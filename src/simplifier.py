@@ -12,6 +12,7 @@ Orchestrates the LLM simplification pipeline with:
 """
 
 import json
+import re
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,58 @@ from src.prompts import (
     build_verification_prompt,
     build_footnote_prompt,
 )
+
+
+def _is_reference_chunk(text: str) -> bool:
+    """
+    Detect if a chunk is primarily references, bibliography, or endnotes.
+
+    Uses multiple heuristics:
+    1. Citation entry patterns (author-year, page ranges, publishers)
+    2. Line structure (bibliography lines are shorter, start with author names)
+    3. Low ratio of connective/narrative words (references don't argue)
+    """
+    lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 10]
+    if not lines:
+        return False
+
+    # Heuristic 1: Bibliography-style line starters
+    # Reference entries typically start with author names or bullets/dashes
+    bib_start_patterns = [
+        r'^[A-Z][a-z]+,\s+[A-Z]\.',       # "Marx, K."
+        r'^[A-Z][a-z]+,\s+[A-Z][a-z]+',   # "Cockshott, Paul"
+        r'^-\s+',                           # "- footnote text"
+        r'^\d+\.\s+[A-Z]',                 # "1. Reference"
+    ]
+
+    # Heuristic 2: Citation content patterns (need 2+ per line)
+    citation_patterns = [
+        r'\(\d{4}\)',           # (1997)
+        r'\d{4}\.',            # 1997.
+        r'\d{4}\)',            # 1997)
+        r'pp\.\s*\d+',         # pp. 123
+        r'vol\.\s*\d+',        # vol. 5
+        r'[Ee]d[s]?\.',        # ed. / eds.
+        r'[Pp]ress',           # University Press
+        r'[Jj]ournal\s+of',    # Journal of
+        r':\s*\d+[-\u2013]\d+',  # : 123-456 (page ranges)
+    ]
+
+    bib_line_count = 0
+    for line in lines:
+        # Check if line starts like a bibliography entry
+        starts_like_bib = any(re.search(p, line) for p in bib_start_patterns)
+        # Check citation content
+        content_matches = sum(1 for p in citation_patterns if re.search(p, line))
+
+        # A line is bibliographic if it starts like a reference AND has 2+ citation markers,
+        # OR it has 4+ citation markers (definitely a reference, not body text)
+        if (starts_like_bib and content_matches >= 2) or content_matches >= 4:
+            bib_line_count += 1
+
+    ratio = bib_line_count / len(lines)
+    return ratio > 0.4
+
 
 
 def _simplify_one_chunk(
@@ -53,6 +106,28 @@ def _simplify_one_chunk(
 
     # Skip near-empty chunks (e.g., "BY" from author bylines)
     if original_word_count < 5:
+        return {
+            "simplified_text": chunk["text"],
+            "attempts": 1,
+            "final_ratio": 1.0,
+            "was_retried": False,
+        }
+
+    # Use LLM-based section labels to skip non-body sections
+    section_type = chunk.get("section_type", "")
+    passthrough_types = {"TITLE", "SUBTITLE", "AUTHOR", "TOC", "REFERENCES", "FOOTNOTES", "APPENDIX"}
+    if section_type in passthrough_types:
+        print(f"\n     📚 Skipping {section_type} chunk (pass-through)")
+        return {
+            "simplified_text": chunk["text"],
+            "attempts": 1,
+            "final_ratio": 1.0,
+            "was_retried": False,
+        }
+
+    # Fallback: regex-based reference detection when no label exists
+    if not section_type and _is_reference_chunk(chunk["text"]):
+        print(f"\n     📚 Skipping reference/bibliography chunk (regex fallback)")
         return {
             "simplified_text": chunk["text"],
             "attempts": 1,
@@ -397,14 +472,63 @@ def _simplify_one_chunk_paragraphs(
             "was_retried": False,
         }
 
+    # Use LLM-based section labels to skip non-body sections
+    section_type = chunk.get("section_type", "")
+    passthrough_types = {"TITLE", "SUBTITLE", "AUTHOR", "TOC", "REFERENCES", "FOOTNOTES", "APPENDIX"}
+    if section_type in passthrough_types:
+        print(f"\n     📚 Skipping {section_type} chunk (pass-through)")
+        return {
+            "simplified_text": chunk["text"],
+            "attempts": 1,
+            "final_ratio": 1.0,
+            "was_retried": False,
+        }
+
+    # Fallback: regex-based reference detection when no label exists
+    if not section_type and _is_reference_chunk(chunk["text"]):
+        print(f"\n     📚 Skipping reference/bibliography chunk (regex fallback)")
+        return {
+            "simplified_text": chunk["text"],
+            "attempts": 1,
+            "final_ratio": 1.0,
+            "was_retried": False,
+        }
+
     # Split into paragraphs
     paragraphs = [p.strip() for p in chunk["text"].split("\n\n") if p.strip()]
+
+    # ── Pre-processing: LLM-based fragment merging ────────────────────────────
+    # PDF extraction sometimes splits sentences across paragraph breaks.
+    # Use LLM to detect broken boundaries, with regex as fast fallback.
+    if len(paragraphs) >= 2:
+        try:
+            from src.doc_classifier import detect_fragment_boundaries
+            boundary_labels = detect_fragment_boundaries(paragraphs, llm)
+
+            merged = [paragraphs[0]]
+            for j, label in enumerate(boundary_labels):
+                if label == "MERGE":
+                    merged[-1] = merged[-1] + " " + paragraphs[j + 1]
+                else:
+                    merged.append(paragraphs[j + 1])
+            paragraphs = merged
+        except Exception:
+            # Fallback: regex-based merge (starts lowercase = continuation)
+            merged = []
+            for para in paragraphs:
+                stripped = para.lstrip("- \u20220123456789.)")
+                is_continuation = (stripped and stripped[0].islower())
+                if merged and is_continuation:
+                    merged[-1] = merged[-1] + " " + para
+                else:
+                    merged.append(para)
+            paragraphs = merged
 
     simplified_paragraphs = []
     para_context = previous_context
 
-    for para in paragraphs:
-        # Skip very short paragraphs (headings, bylines)
+    for i, para in enumerate(paragraphs):
+        # Skip very short paragraphs (headings, bylines, orphans)
         if len(para.split()) < 3:
             simplified_paragraphs.append(para)
             continue
@@ -424,7 +548,7 @@ def _simplify_one_chunk_paragraphs(
             )
             # Clean the result
             result = result.strip()
-            # Remove any meta-labels the model adds
+            # Remove any meta-labels the model adds (lightweight regex first pass)
             result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
             simplified_paragraphs.append(result)
             # Use last simplified paragraph as context for next
@@ -437,6 +561,40 @@ def _simplify_one_chunk_paragraphs(
         # Throttle between paragraphs to stay under TPM limits
         import time
         time.sleep(5)
+
+    # ── Post-processing: LLM-based meta-commentary detection ──────────────────
+    # Check if any simplified paragraphs talk ABOUT the text instead of
+    # rewriting it. Re-simplify those with a stricter prompt.
+    try:
+        from src.doc_classifier import detect_meta_commentary
+        meta_flags = detect_meta_commentary(simplified_paragraphs, llm)
+        meta_count = sum(meta_flags)
+        if meta_count > 0:
+            print(f"\n     🔍 Detected {meta_count} meta-commentary paragraph(s), re-simplifying...")
+            for idx, is_meta in enumerate(meta_flags):
+                if is_meta and idx < len(paragraphs):
+                    # Re-simplify the original paragraph with stricter instruction
+                    sys_prompt, usr_prompt = build_paragraph_prompt(
+                        paragraph_text=paragraphs[min(idx, len(paragraphs) - 1)],
+                        book_summary=book_summary,
+                        glossary=glossary,
+                        previous_context="",
+                    )
+                    # Prepend a strict anti-meta instruction
+                    usr_prompt = (
+                        "CRITICAL: Rewrite the content directly. Do NOT describe or summarize "
+                        "what the text says. Do NOT use phrases like 'this passage discusses', "
+                        "'the author argues', or 'this section examines'. Just restate the "
+                        "actual ideas in simpler words.\n\n" + usr_prompt
+                    )
+                    try:
+                        result = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=temperature)
+                        simplified_paragraphs[idx] = result.strip()
+                        time.sleep(5)
+                    except Exception:
+                        pass  # Keep the original if retry fails
+    except Exception as e:
+        print(f"\n     ⚠️  Meta-commentary check skipped: {str(e)[:80]}")
 
     # Merge similar consecutive paragraphs using embeddings
     simplified_paragraphs = _merge_similar_paragraphs(simplified_paragraphs)
@@ -848,6 +1006,50 @@ def generate_footnotes(
 
     print(f"   Found {len(all_terms)} unique terms for footnotes")
     return all_terms
+
+
+def generate_concept_map(full_text: str, llm) -> str:
+    """
+    Generate a 'Connecting the Ideas' concept map from the full simplified text.
+
+    Args:
+        full_text: The assembled simplified document text.
+        llm:       The LLM client instance.
+
+    Returns:
+        Markdown string with the concept map section, or empty string on failure.
+    """
+    from src.prompts import build_concept_map_prompt
+
+    print("\n🗺️  Generating concept map...")
+
+    sys_prompt, usr_prompt = build_concept_map_prompt(full_text)
+
+    try:
+        response = llm.generate(
+            prompt=usr_prompt,
+            system_prompt=sys_prompt,
+            temperature=0.3,
+        )
+        concept_map = response.strip()
+
+        # Clean any preamble the LLM might add
+        concept_map = re.sub(
+            r'^(Here is|Below is|The following|This concept map).*?\n',
+            '', concept_map, flags=re.IGNORECASE
+        )
+
+        if len(concept_map) < 50:
+            print("     ⚠️  Concept map too short, skipping")
+            return ""
+
+        section = f"\n\n---\n\n## Connecting the Ideas\n\n{concept_map.strip()}\n"
+        print(f"     ✅ Concept map generated ({len(concept_map.split())} words)")
+        return section
+
+    except Exception as e:
+        print(f"     ⚠️  Concept map generation failed: {str(e)[:80]}")
+        return ""
 
 
 def _save_checkpoint(checkpoint: dict, path: Path | None):

@@ -175,7 +175,7 @@ Options:
     total_start = time.time()
 
     # ── Step 1: Sanity Check ─────────────────────────────────────────────────
-    _step("1/8", "Sanity Check")
+    _step("1/10", "Sanity Check")
     from src.sanity_check import run_sanity_check
     run_sanity_check(input_path, exit_on_fail=True)
 
@@ -188,76 +188,9 @@ Options:
             d.mkdir(parents=True, exist_ok=True)
         print("  🧹 Cleared previous output and intermediate files")
 
-    # ── Step 2: Extract & Chunk ──────────────────────────────────────────────
-    if args.resume and CHUNKS_FILE.exists():
-        _step("2/8", "Loading cached extraction")
-        with open(BOOK_STRUCTURE_FILE) as f:
-            chapters = json.load(f)
-        with open(CHUNKS_FILE) as f:
-            chunks = json.load(f)
-        print(f"  Loaded {len(chapters)} sections, {len(chunks)} chunks")
-    else:
-        _step("2/8", "Extraction & Chunking")
-
-        if ext == ".pdf" and use_surya:
-            from src.pdf_parser import extract_pdf_with_surya, detect_chapters, validate_extraction, extract_pdf_metadata
-            print("  🧠 Running surya neural layout detection (this may take a few minutes)...")
-            markdown, surya_structure = extract_pdf_with_surya(input_path)
-            chapters = detect_chapters(markdown)
-            report = validate_extraction(chapters, input_path)
-            doc_metadata = extract_pdf_metadata(input_path)
-        elif ext == ".pdf":
-            from src.pdf_parser import extract_pdf_to_markdown, detect_chapters, validate_extraction, extract_pdf_metadata
-            markdown = extract_pdf_to_markdown(input_path)
-            chapters = detect_chapters(markdown)
-            report = validate_extraction(chapters, input_path)
-            doc_metadata = extract_pdf_metadata(input_path)
-        else:
-            from src.epub_parser import parse_epub_chapters, validate_epub_extraction
-            chapters = parse_epub_chapters(input_path)
-            report = validate_epub_extraction(chapters)
-            doc_metadata = {"title": None, "author": None, "has_toc": False}
-
-        if doc_metadata.get("title"):
-            print(f"  Title:  {doc_metadata['title']}")
-        if doc_metadata.get("author"):
-            print(f"  Author: {doc_metadata['author']}")
-
-        if report.get("warnings"):
-            for w in report["warnings"]:
-                print(f"  ⚠️  {w}")
-
-        # Detect document structure before chunking
-        from src.chunker import create_chunks, get_chunk_stats, detect_document_structure
-        doc_structure = detect_document_structure(chapters)
-
-        print(f"  Structure: {doc_structure['segment_type']} ({doc_structure['total_major_segments']} major segments)")
-        if doc_structure["major_numbered_points"]:
-            nums = [p["number"] for p in doc_structure["major_numbered_points"]]
-            print(f"  Major numbered points: {', '.join(nums)}")
-        if doc_structure["minor_references"]:
-            refs = [r["number"] for r in doc_structure["minor_references"]]
-            print(f"  Minor references: {', '.join(refs)} (will not be treated as major segments)")
-
-        chunks = create_chunks(chapters, max_tokens=MAX_CHUNK_TOKENS, overlap_tokens=OVERLAP_TOKENS)
-        stats = get_chunk_stats(chunks)
-
-        print(f"  {len(chapters)} sections → {stats['total_chunks']} chunks ")
-        print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
-
-        # Save intermediate files
-        INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(BOOK_STRUCTURE_FILE, "w") as f:
-            json.dump(chapters, f, ensure_ascii=False, indent=2)
-        with open(CHUNKS_FILE, "w") as f:
-            json.dump(chunks, f, ensure_ascii=False, indent=2)
-        with open(INTERMEDIATE_DIR / "doc_metadata.json", "w") as f:
-            json.dump(doc_metadata, f, ensure_ascii=False, indent=2)
-        with open(INTERMEDIATE_DIR / "doc_structure.json", "w") as f:
-            json.dump(doc_structure, f, ensure_ascii=False, indent=2)
-
-    # ── Step 3: LLM Setup ────────────────────────────────────────────────────
-    _step("3/8", "LLM Setup")
+    # ── Step 2: LLM Setup ─────────────────────────────────────────────────────
+    # Moved early since the raw-page scan (Step 3) needs the LLM
+    _step("2/10", "LLM Setup")
 
     if use_gemini:
         from src.gemini_client import GeminiClient
@@ -296,16 +229,130 @@ Options:
     speed = llm.estimate_speed()
     print(f"  {speed['model_name']} @ {speed['tokens_per_second']:.0f} tok/s")
 
-    # ── Step 4: Glossary & Summary ───────────────────────────────────────────
+    # ── Step 3: Extract & Chunk ──────────────────────────────────────────────
+    if args.resume and CHUNKS_FILE.exists():
+        _step("3/10", "Loading cached extraction")
+        with open(BOOK_STRUCTURE_FILE) as f:
+            chapters = json.load(f)
+        with open(CHUNKS_FILE) as f:
+            chunks = json.load(f)
+        print(f"  Loaded {len(chapters)} sections, {len(chunks)} chunks")
+    else:
+        _step("3/10", "Extraction & Chunking")
+
+        if ext == ".pdf" and use_surya:
+            from src.pdf_parser import extract_pdf_with_surya, detect_chapters, validate_extraction
+            print("  🧠 Running surya neural layout detection (this may take a few minutes)...")
+            markdown, surya_structure = extract_pdf_with_surya(input_path)
+            chapters = detect_chapters(markdown)
+            report = validate_extraction(chapters, input_path)
+        elif ext == ".pdf":
+            from src.pdf_parser import extract_pdf_to_markdown, detect_chapters, validate_extraction
+            markdown = extract_pdf_to_markdown(input_path)
+            chapters = detect_chapters(markdown)
+            report = validate_extraction(chapters, input_path)
+        else:
+            from src.epub_parser import parse_epub_chapters, validate_epub_extraction
+            chapters = parse_epub_chapters(input_path)
+            report = validate_epub_extraction(chapters)
+
+        if report.get("warnings"):
+            for w in report["warnings"]:
+                print(f"  ⚠️  {w}")
+
+        # Detect document structure before chunking
+        from src.chunker import create_chunks, get_chunk_stats, detect_document_structure
+        doc_structure = detect_document_structure(chapters)
+
+        print(f"  Structure: {doc_structure['segment_type']} ({doc_structure['total_major_segments']} major segments)")
+        if doc_structure["major_numbered_points"]:
+            nums = [p["number"] for p in doc_structure["major_numbered_points"]]
+            print(f"  Major numbered points: {', '.join(nums)}")
+        if doc_structure["minor_references"]:
+            refs = [r["number"] for r in doc_structure["minor_references"]]
+            print(f"  Minor references: {', '.join(refs)} (will not be treated as major segments)")
+
+        chunks = create_chunks(chapters, max_tokens=MAX_CHUNK_TOKENS, overlap_tokens=OVERLAP_TOKENS)
+        stats = get_chunk_stats(chunks)
+
+        print(f"  {len(chapters)} sections → {stats['total_chunks']} chunks ")
+        print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
+
+        # Save intermediate files
+        INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(BOOK_STRUCTURE_FILE, "w") as f:
+            json.dump(chapters, f, ensure_ascii=False, indent=2)
+        with open(CHUNKS_FILE, "w") as f:
+            json.dump(chunks, f, ensure_ascii=False, indent=2)
+        with open(INTERMEDIATE_DIR / "doc_structure.json", "w") as f:
+            json.dump(doc_structure, f, ensure_ascii=False, indent=2)
+
+    # ── Step 4: Raw-Page Document Structure Scan ─────────────────────────────
+    scan_path = INTERMEDIATE_DIR / "doc_scan.json"
+    if args.resume and scan_path.exists():
+        _step("4/10", "Loading cached document scan")
+        with open(scan_path) as f:
+            doc_scan = json.load(f)
+    else:
+        _step("4/10", "Document Structure Scan (raw pages)")
+        if ext == ".pdf":
+            from src.doc_classifier import scan_document_structure, print_scan_summary
+            # Build extracted text for section heading detection
+            # Use markdown if available (fresh run), else reconstruct from chapters
+            try:
+                extracted_text = markdown  # type: ignore[possibly-undefined]
+            except NameError:
+                extracted_text = "\n\n".join(ch.get("text", "") for ch in chapters)
+            doc_scan = scan_document_structure(input_path, llm, extracted_text=extracted_text)
+            print_scan_summary(doc_scan)
+        else:
+            # EPUB — no raw-page scanning; use barebones metadata
+            doc_scan = {
+                "title": None, "subtitle": None, "authors": [],
+                "has_toc": False, "has_abstract": False,
+                "has_references": False, "has_endnotes": False,
+                "sections": [], "total_pages": 0,
+                "body_starts_at_page": 0, "back_matter_starts_at_page": None,
+            }
+
+    # Build doc_metadata from the scan (replaces invisible PDF metadata)
+    doc_metadata = {
+        "title": doc_scan.get("title"),
+        "author": ", ".join(doc_scan.get("authors", [])) or None,
+        "has_toc": doc_scan.get("has_toc", False),
+        "sections": doc_scan.get("sections", []),
+    }
+
+    # Save scan results
+    INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(scan_path, "w") as f:
+        json.dump(doc_scan, f, ensure_ascii=False, indent=2)
+    with open(INTERMEDIATE_DIR / "doc_metadata.json", "w") as f:
+        json.dump(doc_metadata, f, ensure_ascii=False, indent=2)
+
+    # ── Step 5: Chunk Classification ─────────────────────────────────────────
+    _step("5/10", "Chunk Classification")
+    from src.doc_classifier import classify_chunks, print_classification_summary
+
+    section_labels = classify_chunks(chunks, llm)
+    for i, label in enumerate(section_labels):
+        chunks[i]["section_type"] = label
+    print_classification_summary(chunks)
+
+    # Save updated chunks with labels
+    with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+    # ── Step 6: Glossary & Summary ───────────────────────────────────────────
     if args.resume and GLOSSARY_FILE.exists() and BOOK_SUMMARY_FILE.exists():
-        _step("4/8", "Loading cached glossary & summary")
+        _step("6/10", "Loading cached glossary & summary")
         with open(GLOSSARY_FILE) as f:
             glossary = json.load(f)
         with open(BOOK_SUMMARY_FILE) as f:
             book_summary = f.read()
         print(f"  {len(glossary)} terms, {len(book_summary)} char summary")
     else:
-        _step("4/8", "Glossary & Book Summary")
+        _step("6/10", "Glossary & Book Summary")
         from src.chunker import extract_glossary, generate_book_summary
         glossary = extract_glossary(chapters, llm_client=llm)
         book_summary = generate_book_summary(chapters, llm_client=llm)
@@ -316,8 +363,8 @@ Options:
         with open(BOOK_SUMMARY_FILE, "w") as f:
             f.write(book_summary)
 
-    # ── Step 5: Simplification ───────────────────────────────────────────────
-    _step("5/8", "Simplification")
+    # ── Step 7: Simplification ───────────────────────────────────────────────
+    _step("7/10", "Simplification")
     from src.simplifier import simplify_chunks, generate_footnotes
 
     output_chunks = simplify_chunks(
@@ -357,35 +404,47 @@ Options:
     else:
         print("\n  ℹ️  Embedding QA skipped (install sentence-transformers for semantic checks)")
 
-    # ── Step 6: Footnotes ────────────────────────────────────────────────────
-    _step("6/8", "Footnote Generation")
+    # ── Step 8: Footnotes ─────────────────────────────────────────────────────
+    _step("8/10", "Footnote Generation")
     footnotes = generate_footnotes(
         output_chunks=output_chunks,
         llm=llm,
         max_workers=workers,
     )
 
-    # ── Step 7: Assembly ─────────────────────────────────────────────────────
-    _step("7/8", "Assembly")
+    # ── Step 9: Assembly & Concept Map ───────────────────────────────────────
+    _step("9/10", "Assembly")
     from src.assembler import (
         trim_overlaps, assemble_book, generate_toc,
         save_output, compare_lengths, insert_footnotes, qa_check_output,
     )
 
-    # Load metadata (may have been saved during extraction or resume)
-    meta_path = INTERMEDIATE_DIR / "doc_metadata.json"
-    if meta_path.exists():
-        with open(meta_path) as f:
-            doc_metadata = json.load(f)
-    else:
-        doc_metadata = {}
-
+    # doc_metadata was built from the scan in Step 4 — no file reload needed
     trimmed = trim_overlaps(output_chunks, overlap_tokens=OVERLAP_TOKENS)
     book_md = assemble_book(trimmed, chapters, metadata=doc_metadata)
+
+    # Concept map
+    from src.simplifier import generate_concept_map
+    concept_map_md = generate_concept_map(book_md, llm)
+
+    # Insert footnotes
     book_md = insert_footnotes(book_md, footnotes)
 
-    # Only add TOC if the original document had one
-    toc = generate_toc(book_md, force=doc_metadata.get("has_toc", False))
+    # Insert concept map before footnotes section
+    if concept_map_md:
+        for marker in ["\n## Notes", "\n## Footnotes"]:
+            if marker in book_md:
+                pos = book_md.find(marker)
+                divider_pos = book_md.rfind("\n---\n", max(0, pos - 10), pos)
+                insert_at = divider_pos if divider_pos >= 0 else pos
+                book_md = book_md[:insert_at] + concept_map_md + book_md[insert_at:]
+                break
+        else:
+            book_md = book_md.rstrip() + concept_map_md
+
+    # TOC — use the scan-derived signal only (no stale metadata)
+    had_toc = doc_scan.get("has_toc", False)
+    toc = generate_toc(book_md, force=had_toc)
     if toc:
         divider_pos = book_md.find("---")
         if divider_pos > 0:
@@ -396,11 +455,11 @@ Options:
 
     final = book_md
 
-    # ── Step 8: QA Check ─────────────────────────────────────────────────────
-    _step("8/8", "Quality Assurance")
+    # ── Step 10: QA Check ────────────────────────────────────────────────────
+    _step("10/10", "Quality Assurance")
 
-    # Final output QA: fix duplicate headings, paragraphs, bylines
-    from src.final_qa import run_final_qa
+    # 10a: Pattern-based QA — fix duplicate headings, paragraphs, bylines
+    from src.final_qa import run_final_qa, run_landmark_qa
     final_qa_result = run_final_qa(final)
     if final_qa_result["issues_fixed"] > 0:
         final = final_qa_result["fixed_markdown"]
@@ -409,6 +468,17 @@ Options:
             print(f"     • {issue}")
     else:
         print("  ✅ No output anomalies found")
+
+    # 10b: LLM-based landmark QA — fix broken headings, bylines, fragments
+    print("\n  🔬 Reviewing structural landmarks...")
+    landmark_result = run_landmark_qa(final, llm)
+    if landmark_result["issues_fixed"] > 0:
+        final = landmark_result["fixed_markdown"]
+        print(f"  🔧 Fixed {landmark_result['issues_fixed']} landmark issue(s):")
+        for issue in landmark_result["issues_found"]:
+            print(f"     • {issue}")
+    else:
+        print("  ✅ All landmarks OK")
 
     # Load structure map for validation
     struct_path = INTERMEDIATE_DIR / "doc_structure.json"

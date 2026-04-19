@@ -132,12 +132,21 @@ def assemble_book(
     parts = []
 
     # ── Title & Author header ────────────────────────────────────────────────
+    # metadata["title"] and metadata["author"] come from the raw-page scan
+    # which extracts them from visible content on actual PDF pages.
     title = metadata.get("title")
     author = metadata.get("author")
 
     if title:
         parts.append(f"# {title}\n")
+        if author:
+            parts.append(f"*By {author}*\n")
         parts.append("---\n")
+
+    # ── Validate chapter names against scan-derived sections ──────────────────
+    # The scan extracted clean section headings from the document.
+    # Use these to filter out broken chapter names from detect_chapters().
+    scan_sections = set(metadata.get("sections", []))
 
     # ── Check if document has real structure ──────────────────────────────────
     # If all chunks share the same chapter name (especially "Full Document"),
@@ -147,6 +156,24 @@ def assemble_book(
         len(unique_chapters) <= 1
         and any(ch in ("Full Document", "") for ch in unique_chapters)
     )
+
+    # If the scan found section headings, use them to validate chapter names
+    # A chapter name is valid if it matches a scan-detected heading
+    def _is_valid_heading(name: str) -> bool:
+        if not name or name == "Full Document":
+            return False
+        # If scan detected sections, only allow matching headings
+        if scan_sections:
+            return name in scan_sections
+        # No scan data — allow all non-trivial headings but filter fragments
+        # Fragments: start lowercase, end with '.', contain footnote markers
+        if name[0].islower():
+            return False
+        if name.endswith("."):
+            return False
+        if "[^" in name or "[" in name:
+            return False
+        return True
 
     # ── Main content ─────────────────────────────────────────────────────────
     current_chapter = None
@@ -164,9 +191,10 @@ def assemble_book(
         if has_real_chapters:
             if chapter_name != current_chapter:
                 current_chapter = chapter_name
-                # Don't re-emit the title as a chapter heading
-                if chapter_name != metadata.get("title"):
+                # Only emit validated headings — skip broken fragments
+                if _is_valid_heading(chapter_name) and chapter_name != title:
                     parts.append(f"\n\n## {chapter_name}\n")
+
 
                 if section_name:
                     parts.append(f"\n### {section_name}\n")

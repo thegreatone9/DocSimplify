@@ -331,3 +331,167 @@ def _fix_repeated_sentences(text: str) -> tuple[str, list[str]]:
         cleaned_paragraphs.append(" ".join(kept))
 
     return "\n\n".join(cleaned_paragraphs), issues
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LLM-based Landmark QA
+# ═══════════════════════════════════════════════════════════════════════
+
+def run_landmark_qa(markdown: str, llm) -> dict:
+    """
+    LLM-based QA pass that reviews ONLY structural landmarks of the output:
+      - Title (# heading)
+      - Author byline (*By ...*)
+      - Section headings (## / ### headings)
+      - Footnote/Notes section header
+
+    Sends only ~10-20 short lines to the LLM — very cheap.
+    The LLM can fix:
+      - Incomplete/broken heading fragments
+      - Grammatical issues in headings
+      - Improperly formatted bylines
+      - Sentence fragments used as headings
+
+    Args:
+        markdown: The final assembled markdown.
+        llm:      The LLM client instance.
+
+    Returns:
+        Dict with:
+          - fixed_markdown: str (corrected output)
+          - issues_found: list of issue descriptions
+          - issues_fixed: int
+    """
+    # ── Extract landmarks ────────────────────────────────────────────────
+    lines = markdown.split("\n")
+    landmarks = []  # (line_index, line_text, type)
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Title heading
+        if re.match(r"^#\s+.+", stripped):
+            landmarks.append((i, stripped, "TITLE"))
+        # Author byline
+        elif re.match(r"^\*+\s*[Bb]y\s+.+\*+$", stripped):
+            landmarks.append((i, stripped, "AUTHOR_BYLINE"))
+        # Section headings (## or ###)
+        elif re.match(r"^#{2,4}\s+.+", stripped):
+            landmarks.append((i, stripped, "SECTION_HEADING"))
+
+    if not landmarks:
+        return {
+            "fixed_markdown": markdown,
+            "issues_found": [],
+            "issues_fixed": 0,
+        }
+
+    # ── Build prompt with just the landmarks ──────────────────────────────
+    landmark_text = "\n".join(
+        f"{idx}: [{ltype}] {ltext}" for idx, ltext, ltype in landmarks
+    )
+
+    system_prompt = (
+        "You review structural elements of a document for quality issues. "
+        "You output JSON only."
+    )
+
+    user_prompt = f"""Review these structural landmarks from a simplified document.
+Each line has an index, a type label, and the text.
+
+Check EACH landmark for these issues:
+1. INCOMPLETE FRAGMENTS: A heading that is a broken sentence fragment
+   (e.g., "## end of his life, he was sharply critical of capitalism.")
+2. GRAMMATICAL ERRORS: Typos or broken grammar in headings
+3. FORMATTING: Author bylines that contain more than just the author name
+   (e.g., "*By Ed Quish is a doctoral student at...*" should be "*By Ed Quish*")
+4. SENTENCE AS HEADING: A full sentence being used as a heading — headings
+   should be short labels, not sentences
+
+For each issue, provide the corrected text. If a heading is an unrecoverable
+fragment (no way to make it a proper heading), set the fix to "REMOVE".
+
+CRITICAL RULES:
+- Only flag ACTUAL problems — don't change headings that are fine
+- Keep corrections minimal — fix the issue, nothing more
+- Short quoted phrases in headings are OK (e.g., ## "Property-Owning Democracy")
+- The ## Notes heading is ours, always leave it alone
+
+Respond with ONLY this JSON:
+{{
+  "corrections": [
+    {{"index": 0, "original": "## broken heading text", "fixed": "## Corrected Heading", "reason": "Was a sentence fragment"}},
+  ]
+}}
+
+If ALL landmarks are fine, respond with: {{"corrections": []}}
+
+LANDMARKS:
+
+{landmark_text}"""
+
+    try:
+        response = llm.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.0,
+        )
+
+        # Parse response
+        text = response.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if not match:
+            return {"fixed_markdown": markdown, "issues_found": [], "issues_fixed": 0}
+
+        import json
+        result = json.loads(match.group())
+        corrections = result.get("corrections", [])
+
+        if not corrections:
+            return {"fixed_markdown": markdown, "issues_found": [], "issues_fixed": 0}
+
+        # Apply corrections
+        issues = []
+        fixed_lines = list(lines)
+
+        for corr in corrections:
+            idx = corr.get("index")
+            original = corr.get("original", "")
+            fixed = corr.get("fixed", "")
+            reason = corr.get("reason", "")
+
+            if idx is None or not isinstance(idx, int) or idx >= len(fixed_lines):
+                continue
+
+            # Verify the line still matches what the LLM saw
+            actual_line = fixed_lines[idx].strip()
+            if actual_line != original.strip():
+                # Try to find the line by content
+                found = False
+                for j, line in enumerate(fixed_lines):
+                    if line.strip() == original.strip():
+                        idx = j
+                        found = True
+                        break
+                if not found:
+                    continue
+
+            if fixed == "REMOVE":
+                fixed_lines[idx] = ""
+                issues.append(f"Removed broken landmark: '{original[:60]}'")
+            else:
+                fixed_lines[idx] = fixed
+                issues.append(f"Fixed landmark: '{original[:50]}' → '{fixed[:50]}' ({reason})")
+
+        return {
+            "fixed_markdown": "\n".join(fixed_lines),
+            "issues_found": issues,
+            "issues_fixed": len(issues),
+        }
+
+    except Exception as e:
+        print(f"     ⚠️  Landmark QA failed: {str(e)[:80]}")
+        return {"fixed_markdown": markdown, "issues_found": [], "issues_fixed": 0}

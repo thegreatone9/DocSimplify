@@ -499,9 +499,11 @@ def extract_pdf_metadata(pdf_path: str | Path) -> dict:
         else:
             author = raw_author
 
-    # Check for TOC (PDF bookmarks / outlines)
-    toc = doc.get_toc()
-    has_toc = len(toc) > 0
+    # Detect visible TOC by scanning first pages for heading text
+    has_toc = _detect_toc_in_pages(doc)
+
+    # Detect where references/bibliography start (from the back)
+    ref_start_page = _detect_references_start_page(doc)
 
     pages = doc.page_count
     doc.close()
@@ -511,7 +513,84 @@ def extract_pdf_metadata(pdf_path: str | Path) -> dict:
         "author": author,
         "has_toc": has_toc,
         "pages": pages,
+        "reference_start_page": ref_start_page,  # None if no references found
     }
+
+
+def _detect_toc_in_pages(doc, max_pages: int = 4) -> bool:
+    """
+    Scan the first few pages of a PDF for a visible Table of Contents.
+
+    Looks for heading text like 'Table of Contents', 'Contents', etc.
+    and dotted leader + page number patterns (e.g., 'Chapter 1 ....... 5').
+    """
+    toc_headings = [
+        r'\btable\s+of\s+contents\b',
+        r'\bcontents\b',
+        r'\btoc\b',
+        r'\blist\s+of\s+(chapters|sections|figures|tables)\b',
+        r'\b(chapter|section)\s+index\b',
+    ]
+
+    # Dotted leader pattern: text followed by dots and a page number
+    dotted_leader = r'\.{3,}\s*\d+'
+
+    pages_to_check = min(max_pages, doc.page_count)
+    for page_num in range(pages_to_check):
+        page = doc[page_num]
+        text = page.get_text("text").lower()
+
+        # Check for TOC heading
+        has_heading = any(re.search(p, text) for p in toc_headings)
+
+        # Check for dotted leaders (strong indicator)
+        leader_count = len(re.findall(dotted_leader, text))
+
+        if has_heading and leader_count >= 2:
+            return True
+        if leader_count >= 5:
+            # Many dotted leaders = definitely a TOC page even without heading
+            return True
+
+    return False
+
+
+def _detect_references_start_page(doc, max_pages_from_end: int = 5) -> int | None:
+    """
+    Scan the last few pages of a PDF for a References/Bibliography section.
+
+    Returns the 0-indexed page number where references start, or None
+    if no reference section is detected.
+    """
+    ref_headings = [
+        r'\breferences\b',
+        r'\bbibliography\b',
+        r'\bworks?\s+cited\b',
+        r'\bliterature\s+cited\b',
+        r'\bcited\s+works?\b',
+        r'\bsources\b',
+        r'\bendnotes\b',
+        r'\bnotes\s+and\s+references\b',
+        r'\bfurther\s+reading\b',
+    ]
+
+    total_pages = doc.page_count
+    start_from = max(0, total_pages - max_pages_from_end)
+
+    for page_num in range(start_from, total_pages):
+        page = doc[page_num]
+        text = page.get_text("text")
+
+        # Check each line — headings are usually standalone lines
+        for line in text.split("\n"):
+            stripped = line.strip().lower()
+            # Only check short lines (headings, not body text)
+            if len(stripped) > 40:
+                continue
+            if any(re.search(p, stripped) for p in ref_headings):
+                return page_num
+
+    return None
 
 
 def clean_extracted_markdown(markdown_text: str) -> str:
