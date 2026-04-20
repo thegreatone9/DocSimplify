@@ -82,10 +82,19 @@ WHAT CAME JUST BEFORE THIS PASSAGE:
 paragraph by paragraph and make sure EVERY point from the original appears in your output. 
 Your output MUST be at least as many words as the input.
 """
-    # Build structural note if numbered items exist
-    structure_note = ""
-    if numbered_items:
-        structure_note = f"\nSTRUCTURE NOTE: This passage has {len(numbered_items)} numbered item(s): {', '.join(numbered_items)}. Keep exactly these numbers in the same order.\n"
+    # Note: numbered items and bullets are naturally preserved by the LLM
+    # via rule #1 ("keep ALL facts"). Explicit structure notes were removed
+    # because the regex detection produced false positives (page numbers,
+    # footnote refs) that caused the LLM to fabricate fake numbered paragraphs.
+
+    # Build placeholder note if non-prose elements were stripped
+    placeholder_note = ""
+    if "<<IMG_" in chunk_text or "<<TABLE_" in chunk_text or "<<EQ_" in chunk_text:
+        placeholder_note = """
+6. PLACEHOLDERS: The text contains <<IMG_N>>, <<TABLE_N>>, or <<EQ_N>> markers.
+   These represent images, tables, or equations. Copy them EXACTLY into your output
+   in the same position. Do NOT remove, rename, or rewrite them.
+"""
 
     user_prompt = f"""Rewrite the following passage in plain, clear English for a high school graduate.
 {context_section}{retry_warning}
@@ -97,7 +106,7 @@ briefly explain it in parentheses the first time.
 3. Break long sentences into shorter, clearer ones. Keep the author's meaning and logical flow.
 4. Do NOT add commentary, headings, labels, or new information that isn't in the original.
 5. Output ONLY the rewritten text - nothing else.
-{structure_note}
+{placeholder_note}
 PASSAGE TO SIMPLIFY:
 
 {chunk_text}"""
@@ -162,12 +171,20 @@ GLOSSARY (Use these definitions for key terms):
 
     word_count = len(paragraph_text.split())
 
+    # Build placeholder note if non-prose elements were stripped
+    placeholder_note = ""
+    if "<<IMG_" in paragraph_text or "<<TABLE_" in paragraph_text or "<<EQ_" in paragraph_text:
+        placeholder_note = (
+            "\nIMPORTANT: Copy any <<IMG_N>>, <<TABLE_N>>, or <<EQ_N>> placeholders "
+            "EXACTLY into your output in the same position. Do NOT remove them.\n"
+        )
+
     user_prompt = f"""Rewrite this paragraph in plain English (~{word_count} words). 
 Target a high school reading level. Use simple vocabulary but vary your sentence lengths. 
 Keep all facts and the full reasoning chain. Do NOT repeat any point twice. 
 Do NOT summarize or comment on the text - rewrite it directly. 
 Output ONLY the rewritten text.
-{context_line}
+{placeholder_note}{context_line}
 {paragraph_text}"""
 
     return system_prompt, user_prompt
@@ -195,6 +212,55 @@ This summary will be used as context for the next section.
     return system_prompt, user_prompt
 
 
+def build_correction_prompt(
+    original_text: str,
+    simplified_text: str,
+    similarity_score: float,
+) -> tuple[str, str]:
+    """
+    Build a prompt for correcting a simplified chunk that lost too much meaning.
+
+    The LLM sees both the original and its failed attempt, and is asked to
+    surgically restore missing information while keeping the simple language.
+
+    Args:
+        original_text:    The original chunk text.
+        simplified_text:  The bad simplified version (low similarity).
+        similarity_score: The embedding similarity score (0.0-1.0).
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    orig_words = len(original_text.split())
+
+    system_prompt = (
+        "You are a meticulous editor. A previous simplification attempt lost important "
+        "meaning from the original text. Your job is to FIX the simplified version by "
+        "restoring any missing facts, arguments, or details — while keeping the language "
+        "simple and clear. Do NOT start from scratch. Patch the gaps."
+    )
+
+    user_prompt = f"""The simplified version below scored only {similarity_score:.0%} semantic similarity 
+with the original — meaning significant content was lost or distorted.
+
+Compare the ORIGINAL with the SIMPLIFIED VERSION and fix the simplified version:
+1. Identify facts, arguments, names, or details present in the original but missing from the simplified version.
+2. Add the missing content back into the simplified version, using simple language.
+3. Fix any meaning that was distorted or over-generalized.
+4. Keep the output roughly the same length as the original (~{orig_words} words).
+5. Output ONLY the corrected text — nothing else.
+
+ORIGINAL:
+
+{original_text}
+
+SIMPLIFIED VERSION (needs fixing):
+
+{simplified_text}"""
+
+    return system_prompt, user_prompt
+
+
 def build_smoothing_prompt(simplified_text: str) -> tuple[str, str]:
     """
     Build a prompt for harmonizing tone/style across paragraphs after
@@ -218,11 +284,19 @@ def build_smoothing_prompt(simplified_text: str) -> tuple[str, str]:
         "CRITICAL: Do NOT split or add paragraphs. Keep the EXACT same number of paragraphs."
     )
 
+    # Build placeholder note if non-prose elements exist
+    placeholder_note = ""
+    if "<<IMG_" in simplified_text or "<<TABLE_" in simplified_text or "<<EQ_" in simplified_text:
+        placeholder_note = (
+            "\nIMPORTANT: The text contains <<IMG_N>>, <<TABLE_N>>, or <<EQ_N>> placeholders. "
+            "Copy them EXACTLY into your output. Do NOT remove or rewrite them.\n"
+        )
+
     user_prompt = f"""Polish the following text for consistent tone and smooth transitions. 
 Do NOT add, remove, or change any facts. Keep the same length (~{word_count} words). 
 Keep EXACTLY {para_count} paragraphs - do NOT split any paragraph into multiple ones. 
 Output ONLY the polished text.
-
+{placeholder_note}
 {simplified_text}"""
 
     return system_prompt, user_prompt

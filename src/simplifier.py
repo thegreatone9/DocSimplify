@@ -592,8 +592,14 @@ def _simplify_one_chunk_paragraphs(
             "was_retried": False,
         }
 
+    # ── Strip non-prose elements (images, tables, equations) at chunk level ──
+    # Must happen BEFORE paragraph splitting so tables aren't split across paragraphs
+    chunk_text, non_prose_map = strip_non_prose_elements(chunk["text"])
+    if non_prose_map:
+        print(f"     📎 Preserved {len(non_prose_map)} non-prose element(s)")
+
     # Split into paragraphs
-    paragraphs = [p.strip() for p in chunk["text"].split("\n\n") if p.strip()]
+    paragraphs = [p.strip() for p in chunk_text.split("\n\n") if p.strip()]
 
     # ── Pre-processing: LLM-based fragment merging ────────────────────────────
     # PDF extraction sometimes splits sentences across paragraph breaks.
@@ -631,19 +637,13 @@ def _simplify_one_chunk_paragraphs(
             simplified_paragraphs.append(para)
             continue
 
-        # Strip non-prose elements before sending to LLM
-        para_text, para_non_prose = strip_non_prose_elements(para)
-
-        # If the paragraph is entirely non-prose (image-only, table-only), pass through
-        if para_text.strip() == "" or all(c in " \n" for c in para_text.replace("<<", "").replace(">>", "")):
+        # If paragraph is a placeholder-only line, pass through
+        if re.match(r'^\s*<<(IMG|TABLE|EQ)_\d+>>\s*$', para):
             simplified_paragraphs.append(para)
             continue
 
-        if para_non_prose:
-            print(f"       📎 Para {i+1}: preserved {len(para_non_prose)} non-prose element(s)")
-
         sys_prompt, usr_prompt = build_paragraph_prompt(
-            paragraph_text=para_text,
+            paragraph_text=para,
             book_summary=book_summary,
             glossary=glossary,
             previous_context=para_context,
@@ -659,9 +659,6 @@ def _simplify_one_chunk_paragraphs(
             result = result.strip()
             # Remove any meta-labels the model adds (lightweight regex first pass)
             result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
-            # Reinsert non-prose elements
-            if para_non_prose:
-                result = reinsert_non_prose_elements(result, para_non_prose)
             simplified_paragraphs.append(result)
             # Use last simplified paragraph as context for next
             para_context = result[-200:]
@@ -740,6 +737,10 @@ def _simplify_one_chunk_paragraphs(
 
     simplified_word_count = len(simplified_text.split())
     ratio = simplified_word_count / original_word_count if original_word_count > 0 else 1.0
+
+    # ── Reinsert non-prose elements ──────────────────────────────────────
+    if non_prose_map:
+        simplified_text = reinsert_non_prose_elements(simplified_text, non_prose_map)
 
     return {
         "simplified_text": simplified_text,
@@ -1036,6 +1037,121 @@ def _run_verification(chunks, llm, checkpoint):
 
         except Exception as e:
             entry["verification_issues"] = f"Verification error: {e}"
+
+
+# ── Correction Pass ─────────────────────────────────────────────────────────
+
+def run_correction_pass(
+    chunks: list[dict],
+    output_chunks: list[dict],
+    flagged_chunks: list[tuple[str, float]],
+    llm,
+    checkpoint_path: Path | str | None = None,
+    similarity_threshold: float = 0.60,
+    max_corrections: int = 2,
+) -> int:
+    """
+    Re-simplify chunks that scored below the similarity threshold.
+
+    Uses a targeted correction prompt that shows the LLM both the original
+    and its failed attempt, asking it to surgically fix the gaps.
+
+    Args:
+        chunks:               Original chunk dicts with "text".
+        output_chunks:        Simplified chunk dicts with "simplified_text".
+        flagged_chunks:       List of (chunk_id, score) from embedding QA.
+        llm:                  LLM client.
+        checkpoint_path:      Path to checkpoint JSON for updating.
+        similarity_threshold: Only correct chunks below this score.
+        max_corrections:      Max correction attempts per chunk.
+
+    Returns:
+        Number of chunks successfully improved.
+    """
+    from src.prompts import build_correction_prompt
+    from src.embedding_qa import check_semantic_similarity
+
+    if not flagged_chunks:
+        return 0
+
+    # Build lookup maps
+    chunk_map = {str(c["chunk_id"]): c for c in chunks}
+    output_map = {str(c["chunk_id"]): c for c in output_chunks}
+
+    # Load checkpoint if available
+    checkpoint = {}
+    if checkpoint_path:
+        checkpoint_path = Path(checkpoint_path)
+        if checkpoint_path.exists():
+            with open(checkpoint_path, "r") as f:
+                checkpoint = json.load(f)
+
+    improved = 0
+
+    for cid, score in flagged_chunks:
+        if score >= similarity_threshold:
+            continue
+
+        original = chunk_map.get(cid)
+        output = output_map.get(cid)
+        if not original or not output:
+            continue
+
+        original_text = original["text"]
+        current_text = output.get("simplified_text", "")
+        current_score = score
+
+        print(f"     🔧 Correcting chunk {cid} (similarity: {current_score:.0%})...")
+
+        for attempt in range(1, max_corrections + 1):
+            sys_prompt, usr_prompt = build_correction_prompt(
+                original_text=original_text,
+                simplified_text=current_text,
+                similarity_score=current_score,
+            )
+
+            try:
+                corrected = llm.generate(
+                    prompt=usr_prompt,
+                    system_prompt=sys_prompt,
+                    temperature=0.2,
+                )
+                corrected = corrected.strip()
+
+                # Check if the correction actually improved things
+                new_score = check_semantic_similarity(original_text, corrected)
+                if new_score is None:
+                    break
+
+                if new_score > current_score:
+                    current_text = corrected
+                    current_score = new_score
+                    print(f"        Attempt {attempt}: {score:.0%} → {new_score:.0%} ✅")
+
+                    if new_score >= similarity_threshold:
+                        break  # Good enough
+                else:
+                    print(f"        Attempt {attempt}: no improvement ({new_score:.0%})")
+                    break  # Don't keep trying if it's not improving
+
+            except Exception as e:
+                print(f"        Attempt {attempt} failed: {str(e)[:60]}")
+                break
+
+        # Update if improved
+        if current_score > score:
+            output["simplified_text"] = current_text
+            if cid in checkpoint:
+                checkpoint[cid]["simplified_text"] = current_text
+                checkpoint[cid]["correction_score"] = current_score
+            improved += 1
+
+    # Save updated checkpoint
+    if improved > 0 and checkpoint_path and checkpoint:
+        with open(checkpoint_path, "w") as f:
+            json.dump(checkpoint, f, ensure_ascii=False, indent=2)
+
+    return improved
 
 
 # ── Footnote Generation ─────────────────────────────────────────────────────

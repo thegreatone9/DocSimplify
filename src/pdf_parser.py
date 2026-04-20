@@ -33,26 +33,12 @@ def extract_pdf_to_markdown(pdf_path: str | Path) -> str:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    # Ensure images directory exists for extracted images
-    images_dir = pdf_path.parent.parent / "intermediate" / "images"
+    # Save images to the output directory so they sit alongside the .md file
+    from config import OUTPUT_DIR
+    images_dir = OUTPUT_DIR / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Try layout-aware extraction first
-    try:
-        body, footnotes = extract_pdf_with_layout(pdf_path)
-        if body.strip():
-            result = body
-            if footnotes:
-                result += "\n\n---\n\n**Original Document Footnotes:**\n\n"
-                for fn in footnotes:
-                    result += f"- {fn}\n"
-            # Basic cleanup
-            result = re.sub(r"\n{4,}", "\n\n\n", result)
-            return result
-    except Exception as e:
-        print(f"  ⚠️  Layout-aware extraction failed ({e}), falling back to pymupdf4llm")
-
-    # Fallback: pymupdf4llm with image and table extraction
+    # Primary extraction: pymupdf4llm with image and table extraction
     markdown_text = pymupdf4llm.to_markdown(
         str(pdf_path),
         write_images=True,
@@ -61,6 +47,34 @@ def extract_pdf_to_markdown(pdf_path: str | Path) -> str:
         dpi=150,
     )
     markdown_text = re.sub(r"\n{4,}", "\n\n\n", markdown_text)
+
+    # Convert image paths to relative (images/filename.png) for portability
+    markdown_text = re.sub(
+        r'!\[([^\]]*)\]\(([^)]*)\)',
+        lambda m: f'![{m.group(1)}](images/{Path(m.group(2)).name})',
+        markdown_text,
+    )
+
+    # Clean up pymupdf4llm's "picture text" markers into the image alt text
+    # Pattern: ![](path)\n\n**----- Start of picture text -----**<br>\nCaption<br>\n**----- End of picture text -----**
+    markdown_text = re.sub(
+        r'(\!\[[^\]]*\]\([^\)]+\))\s*\n\s*\*\*----- Start of picture text -----\*\*.*?\*\*----- End of picture text -----\*\*\s*(?:<br>)?',
+        r'\1',
+        markdown_text,
+        flags=re.DOTALL,
+    )
+
+    # Post-processing: separate footnotes using layout analysis
+    try:
+        body, footnotes = extract_pdf_with_layout(pdf_path)
+        if footnotes:
+            # Append original document footnotes (if any) to the markdown
+            markdown_text += "\n\n---\n\n**Original Document Footnotes:**\n\n"
+            for fn in footnotes:
+                markdown_text += f"- {fn}\n"
+    except Exception:
+        pass  # Layout analysis failed — proceed with full markdown as-is
+
     return markdown_text
 
 

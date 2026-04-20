@@ -158,6 +158,13 @@ Options:
     output_name = input_path.stem + "_simplified.md"
     output_path = OUTPUT_DIR / output_name
 
+    # ── Default: start fresh. Only keep checkpoint if --resume is passed ──
+    if not args.resume:
+        for stale_file in [CHECKPOINT_FILE, SIMPLIFIED_CHUNKS_FILE, output_path]:
+            if Path(stale_file).exists():
+                Path(stale_file).unlink()
+        print("  🆕 Starting fresh (use --resume to continue a previous run)")
+
     extraction_mode = "surya (neural)" if use_surya else "heuristic (font/position)"
     llm_mode = "Gemini API" if use_gemini else ("Groq API" if use_groq else f"Ollama ({model})")
     print(f"""
@@ -399,6 +406,28 @@ Options:
             print(f"     ⚠️  {len(eq_result['flagged_chunks'])} chunks flagged (low similarity):")
             for cid, score in eq_result["flagged_chunks"][:5]:
                 print(f"        Chunk {cid}: {score:.2%}")
+
+            # Run targeted correction pass on flagged chunks
+            from src.simplifier import run_correction_pass
+            correction_threshold = 0.60
+            needs_correction = [(cid, s) for cid, s in eq_result["flagged_chunks"] if s < correction_threshold]
+            if needs_correction:
+                print(f"\n  🔧 Running correction pass on {len(needs_correction)} chunk(s) below {correction_threshold:.0%}...")
+                improved = run_correction_pass(
+                    chunks=chunks,
+                    output_chunks=output_chunks,
+                    flagged_chunks=needs_correction,
+                    llm=llm,
+                    checkpoint_path=CHECKPOINT_FILE,
+                    similarity_threshold=correction_threshold,
+                )
+                if improved > 0:
+                    print(f"     ✅ Improved {improved} chunk(s)")
+                    # Save updated chunks
+                    with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
+                        json.dump(output_chunks, f, ensure_ascii=False, indent=2)
+                else:
+                    print(f"     ℹ️  No chunks could be improved")
         else:
             print(f"     ✅ All chunks pass semantic similarity check")
     else:

@@ -59,17 +59,9 @@ def scan_document_structure(pdf_path: str | Path, llm, extracted_text: str = "")
     doc = pymupdf.open(str(pdf_path))
     total_pages = doc.page_count
 
-    # ── Call 1: Forward scan (front matter) ───────────────────────────────
+    # ── Call 1: Forward scan (page-by-page for landmarks) ─────────────────
     print("     Scan 1/3: Front matter (forward)...")
-    front_result = _scan_forward(doc, llm, max_pages=5)
-
-    # If all 5 pages were front matter, keep scanning
-    body_start = front_result.get("body_starts_at_page")
-    if body_start is not None and body_start >= 5 and total_pages > 5:
-        print("     → Continuing forward scan (long front matter)...")
-        extra = _scan_forward(doc, llm, max_pages=10, start_page=5)
-        if extra.get("body_starts_at_page") is not None:
-            front_result["body_starts_at_page"] = extra["body_starts_at_page"]
+    front_result = _scan_forward_incremental(doc, llm, max_pages=10)
 
     # ── Call 2: Backward scan (back matter) ───────────────────────────────
     print("     Scan 2/3: Back matter (backward)...")
@@ -129,91 +121,187 @@ def scan_document_structure(pdf_path: str | Path, llm, extracted_text: str = "")
     return result
 
 
-def _scan_forward(doc, llm, max_pages: int = 5, start_page: int = 0) -> dict:
-    """Scan pages from the front to extract front-matter metadata."""
-    end_page = min(start_page + max_pages, doc.page_count)
+def _scan_forward_incremental(doc, llm, max_pages: int = 10) -> dict:
+    """
+    Page-by-page forward scan to find critical document landmarks.
 
-    page_texts = []
-    for i in range(start_page, end_page):
-        text = doc[i].get_text("text").strip()
-        if text:
-            page_texts.append(f"=== PAGE {i + 1} ===\n{text[:800]}")
-        else:
-            page_texts.append(f"=== PAGE {i + 1} ===\n[BLANK PAGE]")
+    Scans one page at a time with a focused prompt. Stops as soon as
+    both title and author are found. This avoids the batch approach
+    where copyright/header text confuses the LLM.
 
-    pages_content = "\n\n".join(page_texts)
+    Returns:
+        Dict with title, subtitle, authors, has_toc, has_abstract,
+        body_starts_at_page.
+    """
+    found_title = None
+    found_subtitle = None
+    found_authors = []
+    found_toc = False
+    found_abstract = False
+    body_start_page = 0
+    body_found = False
 
-    system_prompt = (
-        "You are a document structure analyst. You examine the first pages "
-        "of a document to identify front-matter elements. You output JSON only."
-    )
+    end_page = min(max_pages, doc.page_count)
 
-    user_prompt = f"""Examine these pages from the beginning of a document.
-Your job is to find the document's TITLE, AUTHOR(S), and where the body begins.
+    for page_num in range(end_page):
+        text = doc[page_num].get_text("text").strip()
+        if not text or len(text) < 10:
+            print(f"       Page {page_num + 1}: [blank]")
+            continue
 
-IMPORTANT — Documents come in MANY formats:
-- A book may have a separate title page (page with just the title and author)
-- An academic paper may have the title as the FIRST LINE of page 1, followed immediately by the author and then body text, all on the same page
-- A review/essay may start with the title, then "BY AUTHOR NAME", then body text
-- A report may have a cover page with title, organization, and date
-- The title could be in ALL CAPS, Title Case, or regular case
-- There may be NO separate title page at all
+        # Pre-filter noise that confuses smaller models
+        page_text = text[:1200]
+        # Strip page numbers like "1 | P a g e" or "Page 1"
+        page_text = re.sub(r'^\s*\d+\s*\|\s*P\s*a\s*g\s*e\s*$', '', page_text, flags=re.MULTILINE)
+        page_text = re.sub(r'^\s*Page\s+\d+\s*$', '', page_text, flags=re.MULTILINE | re.IGNORECASE)
+        # Strip copyright lines and continuation lines
+        page_text = re.sub(r'^©.*$', '', page_text, flags=re.MULTILINE)
+        page_text = re.sub(r'^.*(?:copyright|all rights reserved|copies must not|please feel free to reproduce|educational purposes only).*$', '', page_text, flags=re.MULTILINE | re.IGNORECASE)
+        # Strip contact/phone lines
+        page_text = re.sub(r'^.*(?:To contact us|call \d{2}\s*\d{2}\s*\d{2}).*$', '', page_text, flags=re.MULTILINE | re.IGNORECASE)
+        # Strip URLs
+        page_text = re.sub(r'https?://\S+|www\.\S+', '', page_text)
+        # Collapse whitespace
+        page_text = re.sub(r'\n{3,}', '\n\n', page_text).strip()
 
-For each page, classify it as one of:
-- BLANK: Empty or nearly empty page
-- COPYRIGHT: Copyright notice, publisher info, ISBN
-- DEDICATION: Dedication or epigraph
-- TITLE_PAGE: A page that is entirely or primarily the title/author/publication info
-- TITLE_AND_BODY: Page that STARTS with the title/author but also contains body text
-- TOC: Table of contents
-- ABSTRACT: Abstract or summary
-- PREFACE: Preface, foreword, or introduction by another author
-- BODY: Purely main content
+        system_prompt = (
+            "You are a document structure analyst. You examine ONE page at a time "
+            "to find the title and author. You output JSON only."
+        )
 
-Extract the following from THE VISIBLE TEXT:
-- title: The document's main title. This is the short, prominent text that names the work.
-  It could be the very first line on page 1, or on a dedicated title page.
-  Copy it EXACTLY as printed (but use Title Case if it's ALL CAPS).
-- subtitle: Any secondary title line, publication info, or "Review of..." line
-- authors: Author name(s). Look for lines like "BY [NAME]" or names printed prominently.
-  Each author should be just a NAME (1-4 words), not a sentence or bio.
-  If names are in ALL CAPS, convert to Title Case (ED QUISH → Ed Quish).
-- has_toc: true if a table of contents is present
-- has_abstract: true if an abstract section is present
-- body_starts_at_page: Page number where substantive content (arguments/narrative) begins
+        user_prompt = f"""Look at this SINGLE PAGE from a document.
 
-CRITICAL RULES:
-- The title is NEVER a full sentence. It's a short name/label for the document.
-- If the first SHORT line of page 1 looks like a title (and isn't a sentence), it IS the title.
-- Authors are just names — NOT bios, affiliations, or descriptions.
-- If you see "BY [NAME]" or "[NAME]" under the title, that's the author.
-- If you truly cannot find a title, use null. Do NOT guess or invent one.
+Your task: Find the document's TITLE and AUTHOR(S) if they appear on this page.
+
+The title is the short, prominent text that NAMES the work.
+It is NOT a sentence — it's a label/name (typically 2-12 words).
+It could appear after copyright notices, page numbers, or headers.
+IGNORE page numbers like "1 | Page", headers, footers, and copyright notices.
+Focus on the CONTENT text.
+
+The author is the person who wrote the document.
+Look for names after "BY", "Written by", or names printed prominently.
+Authors are just names (1-4 words), NOT bios or affiliations.
+
+Also note: Does this page contain body text (prose paragraphs with arguments/narrative)?
 
 Respond with ONLY this JSON:
 {{
-  "page_classifications": [{{"page": 1, "type": "TITLE_AND_BODY"}}, ...],
   "title": "exact title" or null,
-  "subtitle": "exact subtitle" or null,
-  "authors": ["Name One"] or [],
-  "has_toc": false,
-  "has_abstract": false,
-  "body_starts_at_page": 1
+  "subtitle": "subtitle or sub-heading" or null,
+  "authors": ["Name"] or [],
+  "page_type": "TITLE_PAGE" or "TITLE_AND_BODY" or "COPYRIGHT" or "TOC" or "ABSTRACT" or "BODY" or "BLANK",
+  "has_body_text": true or false
 }}
 
-PAGES:
+PAGE {page_num + 1}:
 
-{pages_content}"""
+{page_text}"""
 
-    try:
-        response = llm.generate(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.0,
-        )
-        return _parse_json_object(response)
-    except Exception as e:
-        print(f"     ⚠️  Forward scan failed: {str(e)[:80]}")
-        return {"body_starts_at_page": 0}
+        try:
+            response = llm.generate(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                temperature=0.0,
+            )
+            page_result = _parse_json_object(response)
+        except Exception as e:
+            print(f"       Page {page_num + 1}: scan failed ({str(e)[:60]})")
+            continue
+
+        # Extract findings from this page
+        page_title = page_result.get("title")
+        page_authors = page_result.get("authors", [])
+        page_type = page_result.get("page_type", "")
+        has_body = page_result.get("has_body_text", False)
+
+        # Update landmarks if found
+        if page_title and not found_title:
+            found_title = page_title
+            print(f"       Page {page_num + 1}: ✅ Title found: \"{found_title}\"")
+        if page_authors and not found_authors:
+            found_authors = page_authors
+            print(f"       Page {page_num + 1}: ✅ Author(s): {found_authors}")
+        if page_result.get("subtitle") and not found_subtitle:
+            found_subtitle = page_result["subtitle"]
+
+        if page_type == "TOC":
+            found_toc = True
+        if page_type == "ABSTRACT":
+            found_abstract = True
+
+        # Track where body text starts
+        if has_body and not body_found:
+            body_start_page = page_num + 1  # 1-indexed
+            body_found = True
+
+        # Log progress if nothing found yet
+        if not page_title and not page_authors:
+            print(f"       Page {page_num + 1}: {page_type or 'scanned'} (no landmarks)")
+
+        # Stop early if we have both title and author
+        if found_title and found_authors:
+            break
+
+    # ── LLM fallback: pick the title from candidate lines if LLM scan failed ──
+    if not found_title and doc.page_count > 0:
+        print("       🔄 Title not found by scan — trying line-picker fallback...")
+        candidate_lines = []
+        for pg in range(min(5, doc.page_count)):
+            raw = doc[pg].get_text("text").strip()[:1500]
+            # Strip noise
+            cleaned = raw
+            cleaned = re.sub(r'^\s*\d+\s*\|\s*P\s*a\s*g\s*e\s*$', '', cleaned, flags=re.MULTILINE)
+            cleaned = re.sub(r'^\s*Page\s+\d+\s*$', '', cleaned, flags=re.MULTILINE | re.IGNORECASE)
+            cleaned = re.sub(r'^©.*$', '', cleaned, flags=re.MULTILINE)
+            cleaned = re.sub(r'^.*(?:copyright|all rights reserved|copies must not|please feel free to reproduce|educational purposes only).*$', '', cleaned, flags=re.MULTILINE | re.IGNORECASE)
+            cleaned = re.sub(r'^.*(?:To contact us|call \d{2}\s*\d{2}\s*\d{2}).*$', '', cleaned, flags=re.MULTILINE | re.IGNORECASE)
+            cleaned = re.sub(r'https?://\S+|www\.\S+', '', cleaned)
+            for line in cleaned.split('\n'):
+                line = line.strip()
+                # Only keep short, non-empty lines as title candidates
+                if line and 3 <= len(line.split()) <= 20 and not line.endswith('.'):
+                    candidate_lines.append(line)
+
+        if candidate_lines:
+            # Deduplicate while preserving order
+            seen = set()
+            unique = []
+            for c in candidate_lines:
+                if c not in seen:
+                    seen.add(c)
+                    unique.append(c)
+            candidate_lines = unique[:30]  # Cap at 30 candidates
+
+            numbered = "\n".join(f"{i+1}. {line}" for i, line in enumerate(candidate_lines))
+            try:
+                pick = llm.generate(
+                    prompt=f"""Below are lines from the first pages of a document. 
+Which line is the TITLE of the document? The title is the short text that names the work.
+Reply with ONLY the line number (e.g. "3").
+
+{numbered}""",
+                    system_prompt="You pick the document title from a list. Reply with just the number.",
+                    temperature=0.0,
+                )
+                # Parse the number
+                num_match = re.search(r'\d+', pick.strip())
+                if num_match:
+                    idx = int(num_match.group()) - 1
+                    if 0 <= idx < len(candidate_lines):
+                        found_title = candidate_lines[idx]
+                        print(f"       📌 Title picked by LLM: \"{found_title}\"")
+            except Exception as e:
+                print(f"       ⚠️  Title fallback failed: {str(e)[:60]}")
+
+    return {
+        "title": found_title,
+        "subtitle": found_subtitle,
+        "authors": found_authors,
+        "has_toc": found_toc,
+        "has_abstract": found_abstract,
+        "body_starts_at_page": body_start_page,
+    }
 
 
 def _scan_backward(doc, llm, max_pages: int = 5) -> dict:

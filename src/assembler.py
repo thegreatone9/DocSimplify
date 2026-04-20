@@ -332,6 +332,9 @@ def insert_footnotes(
     For each term in the footnotes dict, marks the FIRST occurrence in the text
     with [^N] and collects definitions into a "Notes" section at the bottom.
 
+    Footnotes are numbered sequentially by their position in the text,
+    so [^1] is always the first footnote the reader encounters.
+
     Uses case-insensitive matching with word boundaries so "Rawls" matches
     "rawls" in the lookup but preserves the original casing in the text.
 
@@ -349,29 +352,39 @@ def insert_footnotes(
     # e.g., "property-owning democracy" should match before "democracy"
     sorted_terms = sorted(footnotes.keys(), key=len, reverse=True)
 
-    used_footnotes = []  # (number, term, definition)
-    counter = 1
+    # First pass: find positions and insert temporary markers
+    # Use unique temp markers to avoid numbering conflicts
+    matches_found = []  # (position_in_text, term, definition, temp_marker)
     text = markdown_text
+    temp_counter = 0
 
     for term in sorted_terms:
         definition = footnotes[term]
 
         # Build a regex that matches the term with word boundaries, case-insensitive
-        # Escape special regex characters in the term
         escaped = re.escape(term)
         pattern = re.compile(r'(?<!\[)\b(' + escaped + r')\b(?!\])', re.IGNORECASE)
 
         # Only mark the FIRST occurrence
         match = pattern.search(text)
         if match:
-            matched_text = match.group(1)  # preserve original casing
-            replacement = f"{matched_text}[^{counter}]"
+            temp_counter += 1
+            temp_marker = f"__FN_TEMP_{temp_counter}__"
+            matched_text = match.group(1)
+            replacement = f"{matched_text}[{temp_marker}]"
+            matches_found.append((match.start(), term, definition, temp_marker))
             text = text[:match.start()] + replacement + text[match.end():]
-            used_footnotes.append((counter, term, definition))
-            counter += 1
 
-    if not used_footnotes:
+    if not matches_found:
         return markdown_text
+
+    # Second pass: sort by position in text and renumber sequentially
+    matches_found.sort(key=lambda x: x[0])
+
+    used_footnotes = []
+    for final_num, (_, term, definition, temp_marker) in enumerate(matches_found, start=1):
+        text = text.replace(f"[{temp_marker}]", f"[^{final_num}]")
+        used_footnotes.append((final_num, term, definition))
 
     # Build the footnotes section
     footnote_lines = ["\n\n---\n\n## Notes\n"]

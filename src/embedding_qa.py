@@ -25,7 +25,15 @@ def _load_model():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             from sentence_transformers import SentenceTransformer
-            return SentenceTransformer("all-MiniLM-L6-v2")
+            # Use Apple GPU (MPS) if available, otherwise CPU
+            device = "cpu"
+            try:
+                import torch
+                if torch.backends.mps.is_available():
+                    device = "mps"
+            except (ImportError, AttributeError):
+                pass
+            return SentenceTransformer("all-MiniLM-L6-v2", device=device)
     except ImportError:
         return None
 
