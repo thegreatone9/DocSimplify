@@ -187,6 +187,11 @@ def assemble_book(
         if not text.strip():
             continue
 
+        # Skip FRONT_MATTER chunks when we already emitted title/author from metadata
+        section_type = chunk.get("section_type", "")
+        if section_type == "FRONT_MATTER" and title:
+            continue
+
         # Only insert chapter/section headings if the original had them
         if has_real_chapters:
             if chapter_name != current_chapter:
