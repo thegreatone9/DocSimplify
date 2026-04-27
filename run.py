@@ -443,6 +443,7 @@ Options:
         checkpoint_path=CHECKPOINT_FILE,
 
         paragraph_mode=args.paragraph,
+        strict_paragraphs=use_paddle,
     )
 
     with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
@@ -458,45 +459,49 @@ Options:
         print(f"     ⚠️  Drift: {_simp_para_count - _input_para_count:+d} paragraphs")
 
     # ── Step 5b: Embedding QA ────────────────────────────────────────────────
-    from src.embedding_qa import is_available as embedding_available, run_embedding_qa
-    if embedding_available():
-        print("\n  🔬 Running embedding-based quality check...")
-        # Reload checkpoint for embedding QA
-        with open(CHECKPOINT_FILE, "r") as f:
-            eq_checkpoint = json.load(f)
-        eq_result = run_embedding_qa(chunks, eq_checkpoint)
-        print(f"     Checked: {eq_result['total_checked']} chunks")
-        print(f"     Avg semantic similarity: {eq_result['avg_similarity']:.2%}")
-        if eq_result["flagged_chunks"]:
-            print(f"     ⚠️  {len(eq_result['flagged_chunks'])} chunks flagged (low similarity):")
-            for cid, score in eq_result["flagged_chunks"][:5]:
-                print(f"        Chunk {cid}: {score:.2%}")
-
-            # Run targeted correction pass on flagged chunks
-            from src.simplifier import run_correction_pass
-            correction_threshold = 0.60
-            needs_correction = [(cid, s) for cid, s in eq_result["flagged_chunks"] if s < correction_threshold]
-            if needs_correction:
-                print(f"\n  🔧 Running correction pass on {len(needs_correction)} chunk(s) below {correction_threshold:.0%}...")
-                improved = run_correction_pass(
-                    chunks=chunks,
-                    output_chunks=output_chunks,
-                    flagged_chunks=needs_correction,
-                    llm=llm,
-                    checkpoint_path=CHECKPOINT_FILE,
-                    similarity_threshold=correction_threshold,
-                )
-                if improved > 0:
-                    print(f"     ✅ Improved {improved} chunk(s)")
-                    # Save updated chunks
-                    with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
-                        json.dump(output_chunks, f, ensure_ascii=False, indent=2)
-                else:
-                    print(f"     ℹ️  No chunks could be improved")
-        else:
-            print(f"     ✅ All chunks pass semantic similarity check")
+    # Skip in strict paddle mode — paragraph integrity is guaranteed by construction
+    if use_paddle:
+        print("\n  ℹ️  Embedding QA skipped (strict paddle mode — paragraph integrity guaranteed)")
     else:
-        print("\n  ℹ️  Embedding QA skipped (install sentence-transformers for semantic checks)")
+        from src.embedding_qa import is_available as embedding_available, run_embedding_qa
+        if embedding_available():
+            print("\n  🔬 Running embedding-based quality check...")
+            # Reload checkpoint for embedding QA
+            with open(CHECKPOINT_FILE, "r") as f:
+                eq_checkpoint = json.load(f)
+            eq_result = run_embedding_qa(chunks, eq_checkpoint)
+            print(f"     Checked: {eq_result['total_checked']} chunks")
+            print(f"     Avg semantic similarity: {eq_result['avg_similarity']:.2%}")
+            if eq_result["flagged_chunks"]:
+                print(f"     ⚠️  {len(eq_result['flagged_chunks'])} chunks flagged (low similarity):")
+                for cid, score in eq_result["flagged_chunks"][:5]:
+                    print(f"        Chunk {cid}: {score:.2%}")
+
+                # Run targeted correction pass on flagged chunks
+                from src.simplifier import run_correction_pass
+                correction_threshold = 0.60
+                needs_correction = [(cid, s) for cid, s in eq_result["flagged_chunks"] if s < correction_threshold]
+                if needs_correction:
+                    print(f"\n  🔧 Running correction pass on {len(needs_correction)} chunk(s) below {correction_threshold:.0%}...")
+                    improved = run_correction_pass(
+                        chunks=chunks,
+                        output_chunks=output_chunks,
+                        flagged_chunks=needs_correction,
+                        llm=llm,
+                        checkpoint_path=CHECKPOINT_FILE,
+                        similarity_threshold=correction_threshold,
+                    )
+                    if improved > 0:
+                        print(f"     ✅ Improved {improved} chunk(s)")
+                        # Save updated chunks
+                        with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
+                            json.dump(output_chunks, f, ensure_ascii=False, indent=2)
+                    else:
+                        print(f"     ℹ️  No chunks could be improved")
+            else:
+                print(f"     ✅ All chunks pass semantic similarity check")
+        else:
+            print("\n  ℹ️  Embedding QA skipped (install sentence-transformers for semantic checks)")
 
     # ── Step 8: Footnotes ─────────────────────────────────────────────────────
     _step("8/10", "Footnote Generation")

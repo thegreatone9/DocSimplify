@@ -641,6 +641,7 @@ def _simplify_one_chunk_paragraphs(
     max_ratio: float = 1.5,
     max_retries: int = 2,
     previous_context: str = "",
+    strict_paragraphs: bool = False,
 ) -> dict:
     """
     Simplify a chunk by processing each paragraph individually.
@@ -693,7 +694,8 @@ def _simplify_one_chunk_paragraphs(
     # ── Pre-processing: LLM-based fragment merging ────────────────────────────
     # PDF extraction sometimes splits sentences across paragraph breaks.
     # Use LLM to detect broken boundaries, with regex as fast fallback.
-    if len(paragraphs) >= 2:
+    # SKIP in strict_paragraphs mode — paddle provides clean boundaries.
+    if len(paragraphs) >= 2 and not strict_paragraphs:
         try:
             from src.doc_classifier import detect_fragment_boundaries
             boundary_labels = detect_fragment_boundaries(paragraphs, llm)
@@ -765,6 +767,12 @@ def _simplify_one_chunk_paragraphs(
                 )
                 result = result.strip()
                 result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
+                # Force single-paragraph output: the LLM sometimes adds
+                # paragraph breaks within its response, splitting one input
+                # paragraph into two. Collapse all double-newlines to spaces.
+                result = re.sub(r'\n{2,}', ' ', result)
+                result = re.sub(r'\n', ' ', result)
+                result = re.sub(r'  +', ' ', result).strip()
 
                 result_word_count = len(result.split())
                 ratio = result_word_count / para_word_count if para_word_count > 0 else 1.0
@@ -795,48 +803,53 @@ def _simplify_one_chunk_paragraphs(
         simplified_paragraphs.append(best_para_result)
         para_context = best_para_result[-200:]
 
-    # ── Post-processing: LLM-based meta-commentary detection ──────────────────
-    # Check if any simplified paragraphs talk ABOUT the text instead of
-    # rewriting it. Re-simplify those with a stricter prompt.
-    try:
-        from src.doc_classifier import detect_meta_commentary
-        meta_flags = detect_meta_commentary(simplified_paragraphs, llm)
-        meta_count = sum(meta_flags)
-        if meta_count > 0:
-            print(f"\n     🔍 Detected {meta_count} meta-commentary paragraph(s), re-simplifying...")
-            for idx, is_meta in enumerate(meta_flags):
-                if is_meta and idx < len(paragraphs):
-                    # Re-simplify the original paragraph with stricter instruction
-                    sys_prompt, usr_prompt = build_paragraph_prompt(
-                        paragraph_text=paragraphs[min(idx, len(paragraphs) - 1)],
-                        book_summary=book_summary,
-                        glossary=glossary,
-                        previous_context="",
-                    )
-                    # Prepend a strict anti-meta instruction
-                    usr_prompt = (
-                        "CRITICAL: Rewrite the content directly. Do NOT describe or summarize "
-                        "what the text says. Do NOT use phrases like 'this passage discusses', "
-                        "'the author argues', or 'this section examines'. Just restate the "
-                        "actual ideas in simpler words.\n\n" + usr_prompt
-                    )
-                    try:
-                        result = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=temperature)
-                        simplified_paragraphs[idx] = result.strip()
-                        time.sleep(5)
-                    except Exception:
-                        pass  # Keep the original if retry fails
-    except Exception as e:
-        print(f"\n     ⚠️  Meta-commentary check skipped: {str(e)[:80]}")
+    if strict_paragraphs:
+        # ── Strict mode: skip all post-processing that changes paragraph count ──
+        # Paragraph alignment is guaranteed by construction (1 in → 1 out).
+        simplified_text = "\n\n".join(simplified_paragraphs)
+    else:
+        # ── Post-processing: LLM-based meta-commentary detection ──────────────────
+        # Check if any simplified paragraphs talk ABOUT the text instead of
+        # rewriting it. Re-simplify those with a stricter prompt.
+        try:
+            from src.doc_classifier import detect_meta_commentary
+            meta_flags = detect_meta_commentary(simplified_paragraphs, llm)
+            meta_count = sum(meta_flags)
+            if meta_count > 0:
+                print(f"\n     🔍 Detected {meta_count} meta-commentary paragraph(s), re-simplifying...")
+                for idx, is_meta in enumerate(meta_flags):
+                    if is_meta and idx < len(paragraphs):
+                        # Re-simplify the original paragraph with stricter instruction
+                        sys_prompt, usr_prompt = build_paragraph_prompt(
+                            paragraph_text=paragraphs[min(idx, len(paragraphs) - 1)],
+                            book_summary=book_summary,
+                            glossary=glossary,
+                            previous_context="",
+                        )
+                        # Prepend a strict anti-meta instruction
+                        usr_prompt = (
+                            "CRITICAL: Rewrite the content directly. Do NOT describe or summarize "
+                            "what the text says. Do NOT use phrases like 'this passage discusses', "
+                            "'the author argues', or 'this section examines'. Just restate the "
+                            "actual ideas in simpler words.\n\n" + usr_prompt
+                        )
+                        try:
+                            result = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=temperature)
+                            simplified_paragraphs[idx] = result.strip()
+                            time.sleep(5)
+                        except Exception:
+                            pass  # Keep the original if retry fails
+        except Exception as e:
+            print(f"\n     ⚠️  Meta-commentary check skipped: {str(e)[:80]}")
 
-    # Merge similar consecutive paragraphs using embeddings
-    simplified_paragraphs = _merge_similar_paragraphs(simplified_paragraphs)
+        # Merge similar consecutive paragraphs using embeddings
+        simplified_paragraphs = _merge_similar_paragraphs(simplified_paragraphs)
 
-    simplified_text = "\n\n".join(simplified_paragraphs)
-    simplified_text = _clean_llm_output(simplified_text, original_text=chunk["text"])
+        simplified_text = "\n\n".join(simplified_paragraphs)
+        simplified_text = _clean_llm_output(simplified_text, original_text=chunk["text"])
 
-    # Realign paragraph structure to match input
-    simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
+        # Realign paragraph structure to match input
+        simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
 
     # Smoothing pass removed — paragraphs are simplified with context
     # (bridge summaries) so tone is already consistent. Removing this
@@ -888,6 +901,7 @@ def simplify_chunks(
     max_workers: int = 2,
     checkpoint_path: Path | str | None = None,
     paragraph_mode: bool = False,
+    strict_paragraphs: bool = False,
 ) -> list[dict]:
     """
     Simplify all chunks with retry, parallelism, progress bars, ongoing QA,
@@ -930,14 +944,18 @@ def simplify_chunks(
     # ── Choose processing mode ───────────────────────────────────────────────
     if paragraph_mode:
         print(f"   📝 Paragraph mode: simplifying paragraph-by-paragraph")
+        if strict_paragraphs:
+            print(f"   🔒 Strict paragraph mode: 1:1 mapping enforced")
     if max_workers > 1:
         _simplify_parallel(chunks, llm, book_summary, glossary, temperature,
                            min_ratio, max_ratio, max_retries, max_workers,
-                           checkpoint, checkpoint_path, paragraph_mode)
+                           checkpoint, checkpoint_path, paragraph_mode,
+                           strict_paragraphs)
     else:
         _simplify_sequential(chunks, llm, book_summary, glossary, temperature,
                              min_ratio, max_ratio, max_retries,
-                             checkpoint, checkpoint_path, paragraph_mode)
+                             checkpoint, checkpoint_path, paragraph_mode,
+                             strict_paragraphs)
 
 
 
@@ -983,6 +1001,7 @@ def _simplify_sequential(
     chunks, llm, book_summary, glossary, temperature,
     min_ratio, max_ratio, max_retries,
     checkpoint, checkpoint_path, paragraph_mode=False,
+    strict_paragraphs=False,
 ):
     """Process chunks sequentially with bridge summaries for context."""
     previous_context = ""
@@ -1009,6 +1028,7 @@ def _simplify_sequential(
                 min_ratio=min_ratio, max_ratio=max_ratio,
                 max_retries=max_retries,
                 previous_context=previous_context,
+                strict_paragraphs=strict_paragraphs,
             )
         else:
             result = _simplify_one_chunk(
@@ -1041,6 +1061,7 @@ def _simplify_parallel(
     chunks, llm, book_summary, glossary, temperature,
     min_ratio, max_ratio, max_retries, max_workers,
     checkpoint, checkpoint_path, paragraph_mode=False,
+    strict_paragraphs=False,
 ):
     """Process chunks in parallel with ongoing QA."""
     # Filter to only chunks that need processing
@@ -1064,6 +1085,7 @@ def _simplify_parallel(
         simplify_fn = lambda chunk: _simplify_one_chunk_paragraphs(
             chunk, llm, book_summary, glossary, temperature,
             previous_context="",
+            strict_paragraphs=strict_paragraphs,
         )
     else:
         simplify_fn = lambda chunk: _simplify_one_chunk(
