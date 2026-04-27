@@ -139,32 +139,37 @@ def build_paragraph_prompt(
         glossary_lines = [f"  • {term}: {defn}" for term, defn in glossary.items()]
         glossary_text = "\n".join(glossary_lines)
 
-    system_prompt = f"""You rewrite dense academic text in plain English. Keep ALL information - 
+    system_prompt = f"""You rewrite dense academic text into clear, educated prose. Keep ALL information - 
 rewrite, don't summarize. Match the original length.
 
-TARGET AUDIENCE: A high school graduate - intelligent and curious, but not specialized.
+TARGET AUDIENCE: A high school graduate — literate and intelligent, but without specialized 
+academic training. Write at the level of a good newspaper or popular nonfiction book.
 
 CRITICAL RULES:
 1. Never write about the text - rewrite IT. Never start with "The passage argues", 
 "The author states", etc. Write as if YOU are the author making the same points.
-2. Replace complex jargon with everyday equivalents.
+2. Replace obscure jargon with clear equivalents, but don't oversimplify.
+   Use words like "government spending" instead of "fiscal expenditure", but keep words 
+   like "deficit", "inflation", "capital" — a high schooler knows these.
 3. Mix short and long sentences for natural rhythm. Not every sentence should be the same length.
 4. Keep the author's logical connectives that carry argument weight - words like "as distinct 
 from this", "to be sure", "indeed", "in retrospect". Don't flatten them all to "but" or "also".
 5. When the original explains WHY something happens, keep the full causal chain. Do not 
 simplify "X happened because of A, B, and C" into just "X happened because of A".
 6. NEVER repeat information. Each sentence must add something new.
+7. Do NOT use childish phrasing like "big companies take stuff" or "money goes away". 
+   Write like a serious author explaining complex ideas clearly.
 
 EXAMPLE:
 Original: "The neoliberal paradigm, predicated on fiscal austerity, has exacerbated 
 extant inequalities."
-Rewritten: "The economic approach based on cutting government spending has made existing 
+Rewritten: "The economic approach built on cutting government spending has made existing 
 inequalities worse."
 
 BOOK CONTEXT: {book_summary[:500]}
 
 GLOSSARY (Use these definitions for key terms):
-{glossary_text if glossary_text else "(none)"}"""
+{glossary_text if glossary_text else '(none)'}"""
 
     context_line = ""
     if previous_context:
@@ -180,10 +185,10 @@ GLOSSARY (Use these definitions for key terms):
             "EXACTLY into your output in the same position. Do NOT remove them.\n"
         )
 
-    user_prompt = f"""Rewrite this paragraph in plain English (~{word_count} words). 
-Target a high school reading level. Use simple vocabulary but vary your sentence lengths. 
-Keep all facts and the full reasoning chain. Do NOT repeat any point twice. 
-Do NOT summarize or comment on the text - rewrite it directly. 
+    user_prompt = f"""Rewrite this paragraph in clear, accessible prose (~{word_count} words). 
+Target the reading level of a good newspaper — educated but not academic. 
+Keep all facts, arguments, and the full reasoning chain. Do NOT dumb it down to a children's level.
+Do NOT repeat any point twice. Do NOT summarize or comment on the text - rewrite it directly. 
 Output ONLY the rewritten text.
 {placeholder_note}{context_line}
 {paragraph_text}"""
@@ -533,5 +538,45 @@ graph TD
 TEXT:
 
 {sample}"""
+
+    return system_prompt, user_prompt
+
+
+def build_formatting_prompt(markdown_text: str) -> tuple[str, str]:
+    """
+    Build a prompt for a final formatting pass over the output markdown.
+
+    Asks the LLM to add proper markdown heading formatting (##, ###)
+    and bold key terms, without changing any content.
+
+    Args:
+        markdown_text: The complete assembled markdown output.
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    system_prompt = """You are a markdown formatter. Your ONLY job is to add proper heading 
+formatting to a document. You must NOT change any words, sentences, or paragraphs.
+
+RULES:
+1. Identify section headers and format them as ## (major sections) or ### (subsections).
+   Section headers are typically: numbered points ("1.", "2."), standalone short lines that 
+   introduce a new topic, or lines that were clearly headings in the original.
+2. If a paragraph starts with a section number like "2." or "6." followed by a topic shift, 
+   extract just the number as a heading: "## 2." and keep the body text as the paragraph.
+   Do NOT do this if the number is part of a regular sentence flow.
+3. Bold key terms, proper nouns, and important concepts when they first appear — but sparingly.
+   Do NOT bold entire sentences or common words.
+4. Keep the # title and *By Author* exactly as they are.
+5. Do NOT add, remove, merge, or split any paragraphs.
+6. Do NOT change any wording. Output the EXACT same text with only formatting changes.
+7. Preserve all footnote markers [^N] exactly.
+8. Output the COMPLETE document — do not truncate or summarize."""
+
+    user_prompt = f"""Add proper markdown heading formatting to this document. 
+Do NOT change any content — only add ## headings, ### subheadings, and **bold** key terms.
+Output the COMPLETE formatted document.
+
+{markdown_text}"""
 
     return system_prompt, user_prompt

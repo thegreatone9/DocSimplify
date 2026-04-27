@@ -1,119 +1,173 @@
-PaddleOCR LayoutDetection Analysis: Economics_New_Phase.pdf
+PaddleOCR LayoutDetection Analysis: econom_planning.pdf
 DPI: 150
 
 ============================================================
 PAGE 1
 ============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
-  Regions detected: 6
+  Page size: 612×792 pts
+  Image size: 1275×1650 px
+  Regions detected: 9
 
-  Region 0: doc_title (score=0.738)
-    Image coords: (270,178) → (964,202)
-    PDF coords: (130,85) → (463,97)
+  Region 0: doc_title (score=0.959)
+    Image coords: (378,337) → (890,415)
+    PDF coords: (181,162) → (427,199)
+    Lines matched: 2
+    Text: "Socialist planning after the collapse of the Soviet Union..."
+
+  Region 1: text (score=0.897)
+    Image coords: (449,452) → (828,475)
+    PDF coords: (216,217) → (397,228)
     Lines matched: 1
-    Text: "THE ECONOMICS OF THE NEW PHASE OF IMPERIALISM..."
+    Text: "Allin Cottrell and W. Paul Cockshott∗..."
 
-  Region 1: paragraph_title (score=0.569)
-    Image coords: (527,237) → (707,259)
-    PDF coords: (253,114) → (339,124)
+  Region 2: text (score=0.851)
+    Image coords: (610,501) → (661,521)
+    PDF coords: (293,240) → (317,250)
     Lines matched: 1
-    Text: "Prabhat Patnaik..."
+    Text: "1993..."
 
-  Region 2: text (score=0.983)
-    Image coords: (142,352) → (1089,782)
-    PDF coords: (68,169) → (523,375)
+  Region 3: paragraph_title (score=0.824)
+    Image coords: (598,593) → (674,612)
+    PDF coords: (287,285) → (324,294)
+    Lines matched: 1
+    Text: "Abstract..."
+
+  Region 4: abstract (score=0.975)
+    Image coords: (325,624) → (942,825)
+    PDF coords: (156,300) → (452,396)
+    Lines matched: 9
+    Text: "It must seem to many people that the collapse of the Soviet Union (and the plann..."
+
+  Region 5: paragraph_title (score=0.915)
+    Image coords: (275,864) → (449,883)
+    PDF coords: (132,415) → (216,424)
+    Lines matched: 2
+    Text: "1 Introduction..."
+
+  Region 6: text (score=0.986)
+    Image coords: (272,913) → (993,1308)
+    PDF coords: (131,438) → (477,628)
     Lines matched: 16
-    Text: "1. The process of capital accumulation can be conceptually envisaged as occurrin..."
+    Text: "The current state of the socialist calculation debate seems theoretically unsati..."
 
-  Region 3: text (score=0.985)
-    Image coords: (142,812) → (1090,1242)
-    PDF coords: (68,390) → (523,596)
-    Lines matched: 15
-    Text: "To be sure, these two processes are never fully separate in concrete terms. Inde..."
+  Region 7: footnote (score=0.961)
+    Image coords: (274,1325) → (993,1404)
+    PDF coords: (132,636) → (477,674)
+    Lines matched: 4
+    Text: "∗Prepared for conference on The Socialist Calculation Debate After the Upheavals..."
 
-  Region 4: text (score=0.971)
-    Image coords: (142,1272) → (1089,1472)
-    PDF coords: (68,610) → (523,706)
-    Lines matched: 7
-    Text: "But even though "accumulation through encroachment" in the inclusive sense of th..."
-
-  Region 5: footnote (score=0.940)
-    Image coords: (143,1517) → (1088,1602)
-    PDF coords: (69,728) → (522,769)
-    Lines matched: 3
-    Text: "1Marx (1974, 263) talks of "this constant expansion of capital, hence also an ex..."
+  Region 8: number (score=0.770)
+    Image coords: (630,1448) → (639,1463)
+    PDF coords: (302,695) → (307,702)
+    Lines matched: 1
+    Text: "1..."
 
   ✅ No orphaned lines
 
 ============================================================
 PAGE 2
 ============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
+  Page size: 612×792 pts
+  Image size: 1275×1650 px
   Regions detected: 5
 
-  Region 0: text (score=0.952)
-    Image coords: (143,151) → (1089,234)
-    PDF coords: (69,72) → (523,112)
-    Lines matched: 3
-    Text: "innovations of altogether new spheres of production, have ceased to exist; it is..."
+  Region 0: text (score=0.980)
+    Image coords: (272,263) → (993,458)
+    PDF coords: (131,126) → (477,220)
+    Lines matched: 8
+    Text: "It seems to be rather widely taken for granted nowadays that the latter events v..."
 
-  Region 1: text (score=0.986)
-    Image coords: (142,265) → (1090,983)
-    PDF coords: (68,127) → (523,472)
-    Lines matched: 25
-    Text: "All over the capitalist world, and especially in the third world, "disinvestment..."
+  Region 1: text (score=0.985)
+    Image coords: (272,463) → (994,1005)
+    PDF coords: (131,222) → (477,482)
+    Lines matched: 22
+    Text: "It is not surprising that neoclassical economists are content to follow the marc..."
 
-  Region 2: text (score=0.983)
-    Image coords: (142,1013) → (1089,1471)
-    PDF coords: (68,486) → (523,706)
-    Lines matched: 17
-    Text: "2. This burgeoning of "accumulation through encroachment" is in turn the direct ..."
+  Region 2: text (score=0.982)
+    Image coords: (272,1011) → (993,1304)
+    PDF coords: (131,485) → (477,626)
+    Lines matched: 12
+    Text: "Not only have there been very few attempts to defend planning in the socialist j..."
 
-  Region 3: text (score=0.894)
-    Image coords: (226,1502) → (1088,1527)
-    PDF coords: (108,721) → (522,733)
+  Region 3: text (score=0.966)
+    Image coords: (273,1310) → (994,1405)
+    PDF coords: (131,629) → (477,674)
+    Lines matched: 4
+    Text: "The same goes for recent books arguing for socialism; for the most part, economi..."
+
+  Region 4: number (score=0.799)
+    Image coords: (630,1448) → (640,1463)
+    PDF coords: (302,695) → (307,702)
     Lines matched: 1
-    Text: "This deflation, needless to say, is not confined to the third world; it is a glo..."
-
-  Region 4: footnote (score=0.854)
-    Image coords: (144,1575) → (909,1602)
-    PDF coords: (69,756) → (436,769)
-    Lines matched: 1
-    Text: "2For a more extensive discussion of the implications of global deflation see Pat..."
+    Text: "2..."
 
   ✅ No orphaned lines
 
 ============================================================
 PAGE 3
 ============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
-  Regions detected: 4
+  Page size: 612×792 pts
+  Image size: 1275×1650 px
+  Regions detected: 10
 
-  Region 0: text (score=0.979)
-    Image coords: (143,151) → (1089,406)
-    PDF coords: (69,72) → (523,195)
+  Region 0: text (score=0.975)
+    Image coords: (272,262) → (993,357)
+    PDF coords: (131,126) → (477,171)
+    Lines matched: 4
+    Text: "a pertinent critique) and central planning, via his concept of ‘negotiated coord..."
+
+  Region 1: text (score=0.985)
+    Image coords: (272,361) → (993,583)
+    PDF coords: (131,173) → (477,280)
     Lines matched: 9
-    Text: "phenomenon. And the main driving force behind it is international finance capita..."
+    Text: "Przeworski (1989) has commented that “political parties in capitalist society th..."
 
-  Region 1: text (score=0.984)
-    Image coords: (143,438) → (1089,894)
-    PDF coords: (69,210) → (523,429)
-    Lines matched: 16
-    Text: "Since the term "finance capital" was used extensively around the time of the fir..."
+  Region 2: paragraph_title (score=0.921)
+    Image coords: (274,621) → (573,644)
+    PDF coords: (132,298) → (275,309)
+    Lines matched: 2
+    Text: "2 Outline of our proposals..."
 
-  Region 2: text (score=0.983)
-    Image coords: (142,928) → (1089,1325)
-    PDF coords: (68,445) → (523,636)
-    Lines matched: 14
-    Text: "At the same time, however, any focus on “finance capital", no matter of what sor..."
+  Region 3: text (score=0.981)
+    Image coords: (272,670) → (993,789)
+    PDF coords: (131,322) → (477,379)
+    Lines matched: 5
+    Text: "First of all, it will be useful to set out the general conditions which are requ..."
 
-  Region 3: text (score=0.979)
-    Image coords: (142,1358) → (1089,1587)
-    PDF coords: (68,652) → (523,761)
+  Region 4: text (score=0.974)
+    Image coords: (301,814) → (993,910)
+    PDF coords: (144,391) → (477,437)
+    Lines matched: 4
+    Text: "1. A system for arriving at (and periodically revising) a set of targets for fin..."
+
+  Region 5: text (score=0.977)
+    Image coords: (299,932) → (993,1052)
+    PDF coords: (144,447) → (477,505)
+    Lines matched: 5
+    Text: "2. A method of calculating the implications of any given set of final outputs fo..."
+
+  Region 6: text (score=0.947)
+    Image coords: (300,1073) → (992,1120)
+    PDF coords: (144,515) → (476,538)
+    Lines matched: 2
+    Text: "3. A system of monitoring, rewards and sanctions such as will ensure that the di..."
+
+  Region 7: text (score=0.966)
+    Image coords: (273,1143) → (993,1213)
+    PDF coords: (131,549) → (477,582)
+    Lines matched: 3
+    Text: "The provision of these elements involves a number of preconditions, notably an a..."
+
+  Region 8: footnote (score=0.973)
+    Image coords: (273,1233) → (994,1392)
+    PDF coords: (131,592) → (477,668)
     Lines matched: 8
-    Text: "At the same time, there is a palpable slowing down of the growth of the world ec..."
+    Text: "2There have been some recent arguments in favour of market socialism (e.g. Mille..."
+
+  Region 9: number (score=0.799)
+    Image coords: (630,1448) → (639,1462)
+    PDF coords: (302,695) → (307,702)
+    Lines matched: 1
+    Text: "3..."
 
   ✅ No orphaned lines

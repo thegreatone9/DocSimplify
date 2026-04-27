@@ -293,9 +293,51 @@ Options:
         if ext == ".pdf" and use_paddle:
             from src.pdf_parser import extract_pdf_with_paddle, detect_chapters, validate_extraction
             print("  🧠 Running PaddleOCR layout detection...")
-            markdown, paddle_structure = extract_pdf_with_paddle(input_path)
-            chapters = detect_chapters(markdown)
+            markdown, paddle_structure, labeled_blocks = extract_pdf_with_paddle(input_path)
+
+            # Paddle path: use labeled blocks directly — no LLM classification needed
+            from src.chunker import create_chunks_from_blocks, get_chunk_stats
+            chunks = create_chunks_from_blocks(labeled_blocks, max_tokens=MAX_CHUNK_TOKENS)
+            stats = get_chunk_stats(chunks)
+
+            # Chapter structure not used in paddle path but needed for assembly
+            chapters = [{"chapter": "Full Document", "text": markdown}]
+
+            # Validation
             report = validate_extraction(chapters, input_path)
+
+            if report.get("warnings"):
+                for w in report["warnings"]:
+                    print(f"  ⚠️  {w}")
+
+            # Print chunk summary
+            body_chunks = [c for c in chunks if c.get("section_type") == "BODY"]
+            other_chunks = [c for c in chunks if c.get("section_type") != "BODY"]
+            print(f"  📦 {len(chunks)} chunks: {len(body_chunks)} BODY (to simplify), {len(other_chunks)} pass-through")
+            print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
+
+            # Paragraph audit: after chunking
+            _input_para_count = sum(
+                len([p.strip() for p in c['text'].split('\n\n') if p.strip()])
+                for c in chunks if c.get('section_type') == 'BODY'
+            )
+            print(f"  📊 Body paragraph count after chunking: {_input_para_count}")
+
+            # No doc_structure needed for paddle
+            doc_structure = {"segment_type": "paddle", "total_major_segments": 0,
+                             "major_numbered_points": [], "minor_references": []}
+
+            # Save intermediate files
+            INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
+            with open(BOOK_STRUCTURE_FILE, "w") as f:
+                json.dump(chapters, f, ensure_ascii=False, indent=2)
+            with open(CHUNKS_FILE, "w") as f:
+                json.dump(chunks, f, ensure_ascii=False, indent=2)
+            with open(INTERMEDIATE_DIR / "doc_structure.json", "w") as f:
+                json.dump(doc_structure, f, ensure_ascii=False, indent=2)
+            with open(INTERMEDIATE_DIR / "labeled_blocks.json", "w") as f:
+                json.dump(labeled_blocks, f, ensure_ascii=False, indent=2)
+
         elif ext == ".pdf" and use_surya:
             from src.pdf_parser import extract_pdf_with_surya, detect_chapters, validate_extraction
             print("  🧠 Running surya neural layout detection (this may take a few minutes)...")
@@ -312,43 +354,45 @@ Options:
             chapters = parse_epub_chapters(input_path)
             report = validate_epub_extraction(chapters)
 
-        if report.get("warnings"):
-            for w in report["warnings"]:
-                print(f"  ⚠️  {w}")
+        # ── Shared post-extraction for non-paddle paths ─────────────────
+        if not use_paddle:
+            if report.get("warnings"):
+                for w in report["warnings"]:
+                    print(f"  ⚠️  {w}")
 
-        # Detect document structure before chunking
-        from src.chunker import create_chunks, get_chunk_stats, detect_document_structure
-        doc_structure = detect_document_structure(chapters)
+            # Detect document structure before chunking
+            from src.chunker import create_chunks, get_chunk_stats, detect_document_structure
+            doc_structure = detect_document_structure(chapters)
 
-        print(f"  Structure: {doc_structure['segment_type']} ({doc_structure['total_major_segments']} major segments)")
-        if doc_structure["major_numbered_points"]:
-            nums = [p["number"] for p in doc_structure["major_numbered_points"]]
-            print(f"  Major numbered points: {', '.join(nums)}")
-        if doc_structure["minor_references"]:
-            refs = [r["number"] for r in doc_structure["minor_references"]]
-            print(f"  Minor references: {', '.join(refs)} (will not be treated as major segments)")
+            print(f"  Structure: {doc_structure['segment_type']} ({doc_structure['total_major_segments']} major segments)")
+            if doc_structure["major_numbered_points"]:
+                nums = [p["number"] for p in doc_structure["major_numbered_points"]]
+                print(f"  Major numbered points: {', '.join(nums)}")
+            if doc_structure["minor_references"]:
+                refs = [r["number"] for r in doc_structure["minor_references"]]
+                print(f"  Minor references: {', '.join(refs)} (will not be treated as major segments)")
 
-        chunks = create_chunks(chapters, max_tokens=MAX_CHUNK_TOKENS, overlap_tokens=OVERLAP_TOKENS)
-        stats = get_chunk_stats(chunks)
+            chunks = create_chunks(chapters, max_tokens=MAX_CHUNK_TOKENS, overlap_tokens=OVERLAP_TOKENS)
+            stats = get_chunk_stats(chunks)
 
-        print(f"  {len(chapters)} sections → {stats['total_chunks']} chunks ")
-        print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
+            print(f"  {len(chapters)} sections → {stats['total_chunks']} chunks ")
+            print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
 
-        # Paragraph audit: after chunking
-        _input_para_count = sum(
-            len([p.strip() for p in c['text'].split('\n\n') if p.strip()])
-            for c in chunks
-        )
-        print(f"  📊 Paragraph count after chunking: {_input_para_count}")
+            # Paragraph audit: after chunking
+            _input_para_count = sum(
+                len([p.strip() for p in c['text'].split('\n\n') if p.strip()])
+                for c in chunks
+            )
+            print(f"  📊 Paragraph count after chunking: {_input_para_count}")
 
-        # Save intermediate files
-        INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(BOOK_STRUCTURE_FILE, "w") as f:
-            json.dump(chapters, f, ensure_ascii=False, indent=2)
-        with open(CHUNKS_FILE, "w") as f:
-            json.dump(chunks, f, ensure_ascii=False, indent=2)
-        with open(INTERMEDIATE_DIR / "doc_structure.json", "w") as f:
-            json.dump(doc_structure, f, ensure_ascii=False, indent=2)
+            # Save intermediate files
+            INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
+            with open(BOOK_STRUCTURE_FILE, "w") as f:
+                json.dump(chapters, f, ensure_ascii=False, indent=2)
+            with open(CHUNKS_FILE, "w") as f:
+                json.dump(chunks, f, ensure_ascii=False, indent=2)
+            with open(INTERMEDIATE_DIR / "doc_structure.json", "w") as f:
+                json.dump(doc_structure, f, ensure_ascii=False, indent=2)
 
     # ── Step 4: Raw-Page Document Structure Scan ─────────────────────────────
     scan_path = INTERMEDIATE_DIR / "doc_scan.json"
@@ -386,6 +430,22 @@ Options:
         "sections": doc_scan.get("sections", []),
     }
 
+    # For paddle: override title/author from paddle's exact labels
+    # (the LLM scan can truncate titles)
+    if use_paddle:
+        try:
+            for b in labeled_blocks:
+                if b["label"] in ("doc_title", "title"):
+                    paddle_title = b["text"].replace("\n", " ").strip()
+                    # Remove markdown heading prefix if present
+                    paddle_title = paddle_title.lstrip("# ").strip()
+                    if paddle_title:
+                        doc_metadata["title"] = paddle_title
+                        print(f"  📌 Using paddle title: {paddle_title}")
+                    break
+        except NameError:
+            pass  # labeled_blocks not available (resume mode)
+
     # Save scan results
     INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
     with open(scan_path, "w") as f:
@@ -394,13 +454,20 @@ Options:
         json.dump(doc_metadata, f, ensure_ascii=False, indent=2)
 
     # ── Step 5: Chunk Classification ─────────────────────────────────────────
-    _step("5/10", "Chunk Classification")
-    from src.doc_classifier import classify_chunks, print_classification_summary
+    if use_paddle:
+        # Paddle path: section_type already set from paddle labels in create_chunks_from_blocks
+        _step("5/10", "Chunk Classification (skipped — using paddle labels)")
+        body_count = sum(1 for c in chunks if c.get("section_type") == "BODY")
+        other_count = len(chunks) - body_count
+        print(f"  ✅ Using paddle labels: {body_count} BODY, {other_count} pass-through")
+    else:
+        _step("5/10", "Chunk Classification")
+        from src.doc_classifier import classify_chunks, print_classification_summary
 
-    section_labels = classify_chunks(chunks, llm)
-    for i, label in enumerate(section_labels):
-        chunks[i]["section_type"] = label
-    print_classification_summary(chunks)
+        section_labels = classify_chunks(chunks, llm)
+        for i, label in enumerate(section_labels):
+            chunks[i]["section_type"] = label
+        print_classification_summary(chunks)
 
     # Save updated chunks with labels
     with open(CHUNKS_FILE, "w", encoding="utf-8") as f:

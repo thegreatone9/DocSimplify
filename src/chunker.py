@@ -356,6 +356,94 @@ def create_chunks(
     return chunks
 
 
+def create_chunks_from_blocks(
+    labeled_blocks: list[dict],
+    max_tokens: int = 3000,
+) -> list[dict]:
+    """
+    Create LLM-sized chunks from paddle-labeled blocks.
+
+    Only BODY blocks are grouped into word-count-limited chunks for
+    simplification. All other block types (FRONT_MATTER, REFERENCES,
+    VERBATIM) are passed through as individual chunks unchanged.
+
+    This eliminates the need for LLM-based chunk classification — paddle
+    labels are used directly.
+
+    Args:
+        labeled_blocks: Ordered list of dicts from extract_pdf_with_paddle(),
+                        each with keys: label, text, page, section_type.
+        max_tokens:     Maximum tokens per BODY chunk.
+
+    Returns:
+        List of chunk dicts, each with keys:
+          - "chunk_id"      : int
+          - "text"          : str
+          - "section_type"  : str (BODY, FRONT_MATTER, REFERENCES, VERBATIM)
+          - "chapter"       : str (empty — paddle doesn't detect chapters)
+          - "section"       : str
+          - "token_count"   : int
+          - "is_chapter_start" : bool
+    """
+    chunks = []
+    chunk_id = 0
+
+    # Accumulator for consecutive BODY blocks
+    body_buffer = []
+    body_tokens = 0
+
+    def _flush_body():
+        nonlocal chunk_id, body_buffer, body_tokens
+        if not body_buffer:
+            return
+        chunk_text = "\n\n".join(body_buffer)
+        chunks.append({
+            "chunk_id": chunk_id,
+            "text": chunk_text,
+            "section_type": "BODY",
+            "chapter": "Full Document",
+            "section": "",
+            "token_count": count_tokens(chunk_text),
+            "is_chapter_start": (chunk_id == 0),
+        })
+        chunk_id += 1
+        body_buffer = []
+        body_tokens = 0
+
+    for block in labeled_blocks:
+        section_type = block["section_type"]
+
+        if section_type == "BODY":
+            block_tokens = count_tokens(block["text"])
+
+            # If adding this block would exceed max, flush first
+            if body_tokens > 0 and body_tokens + block_tokens > max_tokens:
+                _flush_body()
+
+            body_buffer.append(block["text"])
+            body_tokens += block_tokens
+
+        else:
+            # Non-body block: flush any buffered body, then add as-is
+            _flush_body()
+
+            chunks.append({
+                "chunk_id": chunk_id,
+                "text": block["text"],
+                "section_type": section_type,
+                "chapter": "Full Document",
+                "section": "",
+                "token_count": count_tokens(block["text"]),
+                "is_chapter_start": False,
+            })
+            chunk_id += 1
+
+    # Flush remaining body content
+    _flush_body()
+
+    return chunks
+
+
 def _split_into_segments(text: str) -> list[str]:
     """
     Split document text into structural segments that should stay together.

@@ -653,7 +653,7 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
     return body_md, surya_structure
 
 
-def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict]:
+def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]]:
     """
     Extract PDF text using PaddleOCR's LayoutDetection for layout analysis.
 
@@ -666,9 +666,14 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict]:
         pdf_path: Path to the PDF.
 
     Returns:
-        Tuple of (markdown_text, structure_info):
+        Tuple of (markdown_text, structure_info, labeled_blocks):
           - markdown_text: Full document as Markdown with footnotes separated
           - structure_info: Dict with region counts and types detected
+          - labeled_blocks: Ordered list of dicts with keys:
+              "label": paddle label (text, title, reference, etc.)
+              "text": extracted text for this region
+              "page": 1-indexed page number
+              "section_type": mapped type (BODY, FRONT_MATTER, REFERENCES, VERBATIM)
     """
     import numpy as np
     from PIL import Image
@@ -870,7 +875,109 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict]:
 
     doc.close()
 
-    # ── Assemble markdown ────────────────────────────────────────────────
+    # ── Map paddle labels to section_type ─────────────────────────────────
+    LABEL_TO_SECTION = {
+        "text": "BODY",
+        "title": "FRONT_MATTER",
+        "doc_title": "FRONT_MATTER",
+        "paragraph_title": "SECTION_HEADER",
+        "reference": "REFERENCES",
+        "reference_content": "REFERENCES",
+        "table": "VERBATIM",
+        "table_caption": "VERBATIM",
+        "figure": "VERBATIM",
+        "figure_caption": "VERBATIM",
+        "figure_title": "VERBATIM",
+        "image": "VERBATIM",
+        "equation": "VERBATIM",
+        "formula": "VERBATIM",
+        "abstract": "BODY",
+        "seal": "VERBATIM",
+        "number": "STRIP",         # page numbers — discard
+        "header": "STRIP",         # page headers — discard
+        "footer": "STRIP",         # page footers — discard
+    }
+
+    # ── Build labeled blocks with paragraph splitting applied ─────────────
+    labeled_blocks = []
+    for p in body_parts:
+        raw = p["text"]
+        label = p["label"]
+        section_type = LABEL_TO_SECTION.get(label, "BODY")
+
+        # Skip page numbers, headers, footers
+        if section_type == "STRIP":
+            continue
+
+        # Format section headers as markdown headings
+        if section_type == "SECTION_HEADER":
+            heading_text = raw.replace("\n", " ").strip()
+            # Remove leading "# " if the title processing already added it
+            heading_text = re.sub(r'^#+\s*', '', heading_text)
+            # Detect heading level from numbering: "4.2" = ###, "4" = ##
+            if re.match(r'^\d+\.\d+', heading_text):
+                heading_text = f"### {heading_text}"
+            else:
+                heading_text = f"## {heading_text}"
+            labeled_blocks.append({
+                "label": label,
+                "text": heading_text,
+                "page": p["page"],
+                "section_type": "VERBATIM",  # Pass through as-is, don't simplify
+            })
+            continue
+
+        # Split text regions into paragraphs (coordinate-based splits
+        # already inserted \n\n during extraction)
+        sub_paras = re.split(r'\n{2,}', raw)
+        cleaned_parts = []
+        for sp in sub_paras:
+            cleaned = sp.replace("\n", " ").strip()
+            if cleaned:
+                cleaned_parts.append(cleaned)
+
+        if cleaned_parts:
+            labeled_blocks.append({
+                "label": label,
+                "text": "\n\n".join(cleaned_parts),
+                "page": p["page"],
+                "section_type": section_type,
+            })
+
+    # ── Reclassify text blocks after "References" heading ────────────────
+    # Paddle sometimes labels reference entries as "text" on the first page
+    # of references. Once we see a heading called "References", everything
+    # after it (except other headings) should be REFERENCES.
+    in_references = False
+    for block in labeled_blocks:
+        if block["section_type"] == "VERBATIM" and block["label"] == "paragraph_title":
+            heading_text = block["text"].lstrip("#").strip().lower()
+            if heading_text in ("references", "bibliography", "works cited"):
+                in_references = True
+                continue
+            elif in_references and heading_text:
+                # A new non-reference section heading ends the references zone
+                in_references = False
+        if in_references and block["section_type"] == "BODY":
+            block["section_type"] = "REFERENCES"
+
+    # ── Merge false paragraph splits within text blocks ──────────────────
+    for block in labeled_blocks:
+        if block["section_type"] != "BODY":
+            continue
+        paras = block["text"].split("\n\n")
+        merged = []
+        for para in paras:
+            if (merged
+                and para
+                and para[0].islower()
+                and not re.search(r'[.!?:]\s*$', merged[-1])):
+                merged[-1] = merged[-1].rstrip() + " " + para
+            else:
+                merged.append(para)
+        block["text"] = "\n\n".join(merged)
+
+    # ── Assemble markdown (backward compat) ──────────────────────────────
     body_paragraphs = []
     for p in body_parts:
         raw = p["text"]
@@ -914,7 +1021,13 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict]:
     for label, count in sorted(region_counts.items()):
         print(f"     {label}: {count}")
 
-    return body_md, structure
+    # Summarize labeled blocks
+    block_types = {}
+    for b in labeled_blocks:
+        block_types[b["section_type"]] = block_types.get(b["section_type"], 0) + 1
+    print(f"  📦 Labeled blocks: {len(labeled_blocks)} total — {dict(block_types)}")
+
+    return body_md, structure, labeled_blocks
 
 
 def extract_pdf_metadata(pdf_path: str | Path) -> dict:
