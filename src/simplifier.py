@@ -25,7 +25,6 @@ from src.prompts import (
     build_paragraph_prompt,
     build_bridge_summary_prompt,
     build_smoothing_prompt,
-    build_verification_prompt,
     build_footnote_prompt,
 )
 
@@ -106,6 +105,35 @@ def strip_non_prose_elements(text: str) -> tuple[str, dict[str, str]]:
         placeholders[key] = m.group(0)
         return key
     text = _LATEX_INLINE_RE.sub(_replace_inline_eq, text)
+
+    # 5. Blockquote footnotes: lines starting with > (citations, footnotes)
+    #    e.g., "> 3. Marx (1974, 118) had written..."
+    blockquote_counter = 0
+    result_lines = text.split("\n")
+    i = 0
+    while i < len(result_lines):
+        line = result_lines[i]
+        if re.match(r'^\s*>\s', line):
+            # Collect consecutive blockquote lines
+            bq_start = i
+            while i < len(result_lines) and re.match(r'^\s*>\s', result_lines[i]):
+                i += 1
+            blockquote_counter += 1
+            key = f"<<BLOCKQUOTE_{blockquote_counter}>>"
+            original = "\n".join(result_lines[bq_start:i])
+            placeholders[key] = original
+            result_lines[bq_start:i] = [key]
+            i = bq_start + 1
+        else:
+            i += 1
+    text = "\n".join(result_lines)
+
+    # 6. Horizontal rules: --- or *** or ___
+    def _replace_hr(m):
+        key = f"<<HR_{len(placeholders) + 1}>>"
+        placeholders[key] = m.group(0)
+        return key
+    text = re.sub(r'^(\s*[-*_]{3,}\s*)$', _replace_hr, text, flags=re.MULTILINE)
 
     return text, placeholders
 
@@ -227,6 +255,10 @@ def _simplify_one_chunk(
     if non_prose_map:
         print(f"     📎 Preserved {len(non_prose_map)} non-prose element(s)")
 
+    # Count input paragraphs for enforcement later
+    input_paragraphs = [p.strip() for p in chunk_text.split("\n\n") if p.strip()]
+    input_para_count = len(input_paragraphs)
+
     original_word_count = len(chunk_text.split())
 
     best_result = ""
@@ -249,8 +281,9 @@ def _simplify_one_chunk(
             result = llm.generate(
                 prompt=usr_prompt,
                 system_prompt=sys_prompt,
-                temperature=temperature,
+                temperature=0.3 if not is_retry else 0.2,
             )
+            result = result.strip()
         except Exception as e:
             # On error, keep any previous best result
             if best_result:
@@ -272,6 +305,9 @@ def _simplify_one_chunk(
     # Strip any headings/bold labels the LLM invented
     best_result = _clean_llm_output(best_result, original_text=chunk_text)
 
+    # ── Enforce paragraph count ──────────────────────────────────────────
+    best_result = _enforce_paragraph_count(best_result, input_para_count)
+
     # ── Reinsert non-prose elements ──────────────────────────────────────
     if non_prose_map:
         best_result = reinsert_non_prose_elements(best_result, non_prose_map)
@@ -282,6 +318,56 @@ def _simplify_one_chunk(
         "final_ratio": round(best_ratio, 2),
         "was_retried": attempts > 1,
     }
+
+
+def _enforce_paragraph_count(text: str, expected_count: int) -> str:
+    """
+    Ensure the simplified text has exactly the expected number of paragraphs.
+
+    If the LLM produced extra paragraphs (split one into two), merge the
+    shortest adjacent pair. If fewer (merged two into one), log a warning
+    but don't try to split — the LLM's merge was intentional.
+
+    Args:
+        text:           The simplified text.
+        expected_count: Number of paragraphs in the original input.
+
+    Returns:
+        Text with enforced paragraph count.
+    """
+    if expected_count <= 0:
+        return text
+
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    actual_count = len(paragraphs)
+
+    if actual_count == expected_count:
+        return text  # Already correct
+
+    if actual_count > expected_count:
+        # LLM split paragraphs — merge the shortest adjacent pair repeatedly
+        while len(paragraphs) > expected_count:
+            # Find the pair with the smallest combined word count
+            min_combined = float('inf')
+            merge_idx = 0
+            for i in range(len(paragraphs) - 1):
+                combined = len(paragraphs[i].split()) + len(paragraphs[i + 1].split())
+                if combined < min_combined:
+                    min_combined = combined
+                    merge_idx = i
+            # Merge paragraphs[merge_idx] and paragraphs[merge_idx + 1]
+            merged = paragraphs[merge_idx] + " " + paragraphs[merge_idx + 1]
+            paragraphs = paragraphs[:merge_idx] + [merged] + paragraphs[merge_idx + 2:]
+
+        print(f"     📐 Enforced paragraph count: {actual_count} → {expected_count}")
+        return "\n\n".join(paragraphs)
+
+    if actual_count < expected_count:
+        print(f"     ⚠️  Paragraph count: {actual_count} (expected {expected_count}) — LLM merged paragraphs")
+        # Can't reliably split — return as-is
+        return text
+
+    return text
 
 
 def _clean_llm_output(text: str, original_text: str) -> str:
@@ -551,6 +637,9 @@ def _simplify_one_chunk_paragraphs(
     book_summary: str,
     glossary: dict,
     temperature: float,
+    min_ratio: float = 0.85,
+    max_ratio: float = 1.5,
+    max_retries: int = 2,
     previous_context: str = "",
 ) -> dict:
     """
@@ -630,6 +719,7 @@ def _simplify_one_chunk_paragraphs(
 
     simplified_paragraphs = []
     para_context = previous_context
+    total_retried = 0
 
     for i, para in enumerate(paragraphs):
         # Skip very short paragraphs (headings, bylines, orphans)
@@ -642,34 +732,68 @@ def _simplify_one_chunk_paragraphs(
             simplified_paragraphs.append(para)
             continue
 
-        sys_prompt, usr_prompt = build_paragraph_prompt(
-            paragraph_text=para,
-            book_summary=book_summary,
-            glossary=glossary,
-            previous_context=para_context,
-        )
+        para_word_count = len(para.split())
+        best_para_result = para  # fallback to original
+        best_para_ratio = 0.0
+        para_retried = False
 
-        try:
-            result = llm.generate(
-                prompt=usr_prompt,
-                system_prompt=sys_prompt,
-                temperature=temperature,
+        for attempt in range(1, max_retries + 2):
+            is_retry = attempt > 1
+
+            sys_prompt, usr_prompt = build_paragraph_prompt(
+                paragraph_text=para,
+                book_summary=book_summary,
+                glossary=glossary,
+                previous_context=para_context,
             )
-            # Clean the result
-            result = result.strip()
-            # Remove any meta-labels the model adds (lightweight regex first pass)
-            result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
-            simplified_paragraphs.append(result)
-            # Use last simplified paragraph as context for next
-            para_context = result[-200:]
-        except Exception as e:
-            # Log the error so we can see what's failing
-            print(f"\n     ⚠️  Paragraph failed: {str(e)[:120]}")
-            simplified_paragraphs.append(para)
 
-        # Throttle between paragraphs to stay under TPM limits
-        import time
-        time.sleep(5)
+            # On retry, prepend a stricter instruction
+            if is_retry:
+                usr_prompt = (
+                    "IMPORTANT: Your previous simplification was too short and lost "
+                    "important information. This time, preserve ALL key details, names, "
+                    "examples, and arguments. The output should be approximately the "
+                    "same length as the input — simplify the LANGUAGE, not the CONTENT.\n\n"
+                    + usr_prompt
+                )
+
+            try:
+                result = llm.generate(
+                    prompt=usr_prompt,
+                    system_prompt=sys_prompt,
+                    temperature=temperature if not is_retry else 0.2,
+                )
+                result = result.strip()
+                result = re.sub(r"^(Rewritten|Simplified|Here is)[:\s].*?\n", "", result, flags=re.IGNORECASE)
+
+                result_word_count = len(result.split())
+                ratio = result_word_count / para_word_count if para_word_count > 0 else 1.0
+
+                # Keep the best attempt (closest to 1.0)
+                if abs(ratio - 1.0) < abs(best_para_ratio - 1.0) or best_para_result == para:
+                    best_para_result = result
+                    best_para_ratio = ratio
+
+                if min_ratio <= ratio <= max_ratio:
+                    break  # Acceptable
+
+                if is_retry:
+                    print(f"\n     ⚠️  ¶{i} retry {attempt-1}: ratio={ratio:.2f} (need ≥{min_ratio})")
+
+            except Exception as e:
+                print(f"\n     ⚠️  ¶{i} failed: {str(e)[:120]}")
+                break
+
+            if attempt > 1:
+                para_retried = True
+            import time
+            time.sleep(3)
+
+        if para_retried:
+            total_retried += 1
+
+        simplified_paragraphs.append(best_para_result)
+        para_context = best_para_result[-200:]
 
     # ── Post-processing: LLM-based meta-commentary detection ──────────────────
     # Check if any simplified paragraphs talk ABOUT the text instead of
@@ -714,26 +838,9 @@ def _simplify_one_chunk_paragraphs(
     # Realign paragraph structure to match input
     simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
 
-    # Smoothing pass: harmonize tone AFTER realignment
-    realigned_paras = [p.strip() for p in simplified_text.split("\n\n") if p.strip()]
-    if len(realigned_paras) >= 1 and len(simplified_text.split()) > 20:
-        try:
-            sys_prompt, usr_prompt = build_smoothing_prompt(simplified_text)
-            smoothed = llm.generate(
-                prompt=usr_prompt,
-                system_prompt=sys_prompt,
-                temperature=0.2,
-            )
-            smoothed = smoothed.strip()
-            # Only use smoothed version if it's roughly the same length
-            smooth_ratio = len(smoothed.split()) / len(simplified_text.split())
-            if 0.8 <= smooth_ratio <= 1.3:
-                simplified_text = smoothed
-        except Exception as e:
-            print(f"\n     ℹ️  Smoothing skipped: {str(e)[:80]}")
-
-    # Re-realign in case the smoothing LLM re-split paragraphs
-    simplified_text = _realign_paragraphs(chunk["text"], simplified_text)
+    # Smoothing pass removed — paragraphs are simplified with context
+    # (bridge summaries) so tone is already consistent. Removing this
+    # eliminates ~N extra LLM calls per chunk, halving runtime.
 
     simplified_word_count = len(simplified_text.split())
     ratio = simplified_word_count / original_word_count if original_word_count > 0 else 1.0
@@ -744,9 +851,9 @@ def _simplify_one_chunk_paragraphs(
 
     return {
         "simplified_text": simplified_text,
-        "attempts": 1,
+        "attempts": 1 + total_retried,
         "final_ratio": round(ratio, 2),
-        "was_retried": False,
+        "was_retried": total_retried > 0,
     }
 
 
@@ -780,7 +887,6 @@ def simplify_chunks(
     max_retries: int = 2,
     max_workers: int = 2,
     checkpoint_path: Path | str | None = None,
-    verify: bool = False,
     paragraph_mode: bool = False,
 ) -> list[dict]:
     """
@@ -833,9 +939,7 @@ def simplify_chunks(
                              min_ratio, max_ratio, max_retries,
                              checkpoint, checkpoint_path, paragraph_mode)
 
-    # ── Verification pass ────────────────────────────────────────────────────
-    if verify:
-        _run_verification(chunks, llm, checkpoint)
+
 
     # ── Final QA report ──────────────────────────────────────────────────────
     _qa_progress_report(checkpoint, len(chunks), label="FINAL")
@@ -869,10 +973,7 @@ def simplify_chunks(
     qa_failures = sum(1 for c in chunks
                       if checkpoint.get(str(c["chunk_id"]), {}).get("qa_issues"))
     print(f"   QA issues found:  {qa_failures} (auto-fixed)")
-    if verify:
-        flagged = sum(1 for c in chunks
-                      if checkpoint.get(str(c["chunk_id"]), {}).get("verification_issues"))
-        print(f"   Flagged (info loss): {flagged}")
+
     print(f"{'='*50}")
 
     return output_chunks
@@ -905,6 +1006,8 @@ def _simplify_sequential(
         if paragraph_mode:
             result = _simplify_one_chunk_paragraphs(
                 chunk, llm, book_summary, glossary, temperature,
+                min_ratio=min_ratio, max_ratio=max_ratio,
+                max_retries=max_retries,
                 previous_context=previous_context,
             )
         else:
@@ -1006,37 +1109,8 @@ def _simplify_parallel(
                 last_report_pct = int(done_pct // 10) * 10
 
 
-def _run_verification(chunks, llm, checkpoint):
-    """Run verification pass — ask LLM to compare original vs simplified for info loss."""
-    print("\n🔍 Running verification pass...")
 
-    for chunk in tqdm(chunks, desc="Verifying", unit="chunk"):
-        cid = str(chunk["chunk_id"])
-        entry = checkpoint.get(cid, {})
-        simplified = entry.get("simplified_text", "")
 
-        if not simplified or len(chunk["text"].split()) < 5:
-            continue
-
-        sys_prompt, usr_prompt = build_verification_prompt(
-            original_text=chunk["text"],
-            simplified_text=simplified,
-        )
-
-        try:
-            verdict = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=0.1)
-
-            # Check if the model flagged issues
-            is_clean = ("no issues" in verdict.lower() or "all preserved" in verdict.lower())
-
-            if not is_clean:
-                entry["verification_issues"] = verdict.strip()
-                print(f"\n   ⚠️  Chunk {cid}: {verdict[:150]}...")
-            else:
-                entry["verification_issues"] = None
-
-        except Exception as e:
-            entry["verification_issues"] = f"Verification error: {e}"
 
 
 # ── Correction Pass ─────────────────────────────────────────────────────────
@@ -1099,51 +1173,72 @@ def run_correction_pass(
 
         original_text = original["text"]
         current_text = output.get("simplified_text", "")
-        current_score = score
 
-        print(f"     🔧 Correcting chunk {cid} (similarity: {current_score:.0%})...")
+        # Split into paragraphs for per-paragraph correction
+        orig_paras = [p.strip() for p in original_text.split("\n\n") if p.strip()]
+        simp_paras = [p.strip() for p in current_text.split("\n\n") if p.strip()]
 
-        for attempt in range(1, max_corrections + 1):
+        print(f"     🔧 Correcting chunk {cid} (similarity: {score:.0%}, {len(orig_paras)} paragraphs)...")
+
+        # If paragraph counts differ, fall back to whole-chunk correction
+        if len(orig_paras) != len(simp_paras):
+            # Whole-chunk correction with paragraph enforcement
             sys_prompt, usr_prompt = build_correction_prompt(
                 original_text=original_text,
                 simplified_text=current_text,
-                similarity_score=current_score,
+                similarity_score=score,
             )
-
             try:
-                corrected = llm.generate(
-                    prompt=usr_prompt,
-                    system_prompt=sys_prompt,
-                    temperature=0.2,
-                )
+                corrected = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=0.2)
                 corrected = corrected.strip()
-
-                # Check if the correction actually improved things
+                # Enforce paragraph count
+                corrected = _enforce_paragraph_count(corrected, len(orig_paras))
                 new_score = check_semantic_similarity(original_text, corrected)
-                if new_score is None:
-                    break
-
-                if new_score > current_score:
+                if new_score and new_score > score:
                     current_text = corrected
-                    current_score = new_score
-                    print(f"        Attempt {attempt}: {score:.0%} → {new_score:.0%} ✅")
-
-                    if new_score >= similarity_threshold:
-                        break  # Good enough
-                else:
-                    print(f"        Attempt {attempt}: no improvement ({new_score:.0%})")
-                    break  # Don't keep trying if it's not improving
-
+                    print(f"        Whole-chunk: {score:.0%} → {new_score:.0%} ✅")
             except Exception as e:
-                print(f"        Attempt {attempt} failed: {str(e)[:60]}")
-                break
+                print(f"        Correction failed: {str(e)[:60]}")
+        else:
+            # Per-paragraph correction
+            corrected_paras = []
+            any_improved = False
+            for i, (orig_p, simp_p) in enumerate(zip(orig_paras, simp_paras)):
+                para_sim = check_semantic_similarity(orig_p, simp_p)
+                if para_sim is not None and para_sim < similarity_threshold and len(orig_p.split()) > 10:
+                    # This paragraph needs correction
+                    sys_prompt, usr_prompt = build_correction_prompt(
+                        original_text=orig_p,
+                        simplified_text=simp_p,
+                        similarity_score=para_sim,
+                    )
+                    try:
+                        corrected_p = llm.generate(prompt=usr_prompt, system_prompt=sys_prompt, temperature=0.2)
+                        corrected_p = corrected_p.strip()
+                        # Merge multi-paragraph output back into one paragraph
+                        corrected_p = " ".join(corrected_p.split("\n\n"))
+                        new_p_score = check_semantic_similarity(orig_p, corrected_p)
+                        if new_p_score and new_p_score > para_sim:
+                            corrected_paras.append(corrected_p)
+                            any_improved = True
+                            print(f"        ¶{i+1}: {para_sim:.0%} → {new_p_score:.0%} ✅")
+                        else:
+                            corrected_paras.append(simp_p)
+                    except Exception:
+                        corrected_paras.append(simp_p)
+                else:
+                    corrected_paras.append(simp_p)
 
-        # Update if improved
-        if current_score > score:
+            if any_improved:
+                current_text = "\n\n".join(corrected_paras)
+
+        # Check overall improvement
+        final_score = check_semantic_similarity(original_text, current_text)
+        if final_score and final_score > score:
             output["simplified_text"] = current_text
             if cid in checkpoint:
                 checkpoint[cid]["simplified_text"] = current_text
-                checkpoint[cid]["correction_score"] = current_score
+                checkpoint[cid]["correction_score"] = final_score
             improved += 1
 
     # Save updated checkpoint

@@ -41,3 +41,7 @@ notebooks/.ipynb_checkpoints/
 *.pt
 *.bin
 *.safetensors
+
+# Test output directories
+test_surya_output/
+test_paddle_output/

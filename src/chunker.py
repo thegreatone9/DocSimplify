@@ -457,7 +457,7 @@ def _add_overlap(
     skip_if_chapter_start: bool = False,
 ) -> str:
     """Add trailing overlap from the previous chunk for continuity."""
-    if not previous_tail or skip_if_chapter_start:
+    if not previous_tail or skip_if_chapter_start or overlap_tokens <= 0:
         return chunk_text
     overlap_chars = overlap_tokens * 4
     overlap_text = previous_tail[-overlap_chars:]

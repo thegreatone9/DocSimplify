@@ -1,0 +1,119 @@
+PaddleOCR LayoutDetection Analysis: Economics_New_Phase.pdf
+DPI: 150
+
+============================================================
+PAGE 1
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 6
+
+  Region 0: doc_title (score=0.738)
+    Image coords: (270,178) → (964,202)
+    PDF coords: (130,85) → (463,97)
+    Lines matched: 1
+    Text: "THE ECONOMICS OF THE NEW PHASE OF IMPERIALISM..."
+
+  Region 1: paragraph_title (score=0.569)
+    Image coords: (527,237) → (707,259)
+    PDF coords: (253,114) → (339,124)
+    Lines matched: 1
+    Text: "Prabhat Patnaik..."
+
+  Region 2: text (score=0.983)
+    Image coords: (142,352) → (1089,782)
+    PDF coords: (68,169) → (523,375)
+    Lines matched: 16
+    Text: "1. The process of capital accumulation can be conceptually envisaged as occurrin..."
+
+  Region 3: text (score=0.985)
+    Image coords: (142,812) → (1090,1242)
+    PDF coords: (68,390) → (523,596)
+    Lines matched: 15
+    Text: "To be sure, these two processes are never fully separate in concrete terms. Inde..."
+
+  Region 4: text (score=0.971)
+    Image coords: (142,1272) → (1089,1472)
+    PDF coords: (68,610) → (523,706)
+    Lines matched: 7
+    Text: "But even though "accumulation through encroachment" in the inclusive sense of th..."
+
+  Region 5: footnote (score=0.940)
+    Image coords: (143,1517) → (1088,1602)
+    PDF coords: (69,728) → (522,769)
+    Lines matched: 3
+    Text: "1Marx (1974, 263) talks of "this constant expansion of capital, hence also an ex..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 2
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 5
+
+  Region 0: text (score=0.952)
+    Image coords: (143,151) → (1089,234)
+    PDF coords: (69,72) → (523,112)
+    Lines matched: 3
+    Text: "innovations of altogether new spheres of production, have ceased to exist; it is..."
+
+  Region 1: text (score=0.986)
+    Image coords: (142,265) → (1090,983)
+    PDF coords: (68,127) → (523,472)
+    Lines matched: 25
+    Text: "All over the capitalist world, and especially in the third world, "disinvestment..."
+
+  Region 2: text (score=0.983)
+    Image coords: (142,1013) → (1089,1471)
+    PDF coords: (68,486) → (523,706)
+    Lines matched: 17
+    Text: "2. This burgeoning of "accumulation through encroachment" is in turn the direct ..."
+
+  Region 3: text (score=0.894)
+    Image coords: (226,1502) → (1088,1527)
+    PDF coords: (108,721) → (522,733)
+    Lines matched: 1
+    Text: "This deflation, needless to say, is not confined to the third world; it is a glo..."
+
+  Region 4: footnote (score=0.854)
+    Image coords: (144,1575) → (909,1602)
+    PDF coords: (69,756) → (436,769)
+    Lines matched: 1
+    Text: "2For a more extensive discussion of the implications of global deflation see Pat..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 3
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 4
+
+  Region 0: text (score=0.979)
+    Image coords: (143,151) → (1089,406)
+    PDF coords: (69,72) → (523,195)
+    Lines matched: 9
+    Text: "phenomenon. And the main driving force behind it is international finance capita..."
+
+  Region 1: text (score=0.984)
+    Image coords: (143,438) → (1089,894)
+    PDF coords: (69,210) → (523,429)
+    Lines matched: 16
+    Text: "Since the term "finance capital" was used extensively around the time of the fir..."
+
+  Region 2: text (score=0.983)
+    Image coords: (142,928) → (1089,1325)
+    PDF coords: (68,445) → (523,636)
+    Lines matched: 14
+    Text: "At the same time, however, any focus on “finance capital", no matter of what sor..."
+
+  Region 3: text (score=0.979)
+    Image coords: (142,1358) → (1089,1587)
+    PDF coords: (68,652) → (523,761)
+    Lines matched: 8
+    Text: "At the same time, there is a palpable slowing down of the growth of the world ec..."
+
+  ✅ No orphaned lines

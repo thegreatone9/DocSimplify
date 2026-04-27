@@ -89,11 +89,12 @@ Your output MUST be at least as many words as the input.
 
     # Build placeholder note if non-prose elements were stripped
     placeholder_note = ""
-    if "<<IMG_" in chunk_text or "<<TABLE_" in chunk_text or "<<EQ_" in chunk_text:
+    has_placeholders = any(marker in chunk_text for marker in ["<<IMG_", "<<TABLE_", "<<EQ_", "<<BLOCKQUOTE_", "<<HR_"])
+    if has_placeholders:
         placeholder_note = """
-6. PLACEHOLDERS: The text contains <<IMG_N>>, <<TABLE_N>>, or <<EQ_N>> markers.
-   These represent images, tables, or equations. Copy them EXACTLY into your output
-   in the same position. Do NOT remove, rename, or rewrite them.
+6. PLACEHOLDERS: The text contains <<IMG_N>>, <<TABLE_N>>, <<EQ_N>>, <<BLOCKQUOTE_N>>, or <<HR_N>> markers.
+   These represent images, tables, equations, citations, or horizontal rules.
+   Copy them EXACTLY into your output in the same position. Do NOT remove, rename, or rewrite them.
 """
 
     user_prompt = f"""Rewrite the following passage in plain, clear English for a high school graduate.

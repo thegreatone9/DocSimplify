@@ -1,0 +1,96 @@
+Surya Layout Analysis: Economics_New_Phase.pdf
+DPI: 150
+
+============================================================
+PAGE 1
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 1
+
+  Region 0: SectionHeader
+    PDF coords: (149,210) → (446,632)
+    Image coords: (310,438) → (930,1316)
+    Lines matched: 29
+    Text: "occurs through an expansion of each of these blocs, though admittedly at very di..."
+
+  ⚠️  ORPHANED LINES: 14
+    y=86.3  "THE ECONOMICS OF THE NEW PHASE OF IMPERIALISM "
+    y=113.9  "Prabhat Patnaik "
+    y=168.9  "1. "
+    y=168.9  "The process of capital accumulation can be conceptually envisaged as o"
+    y=182.7  "two distinct and alternative ways. I shall call the first of these "ac"
+    y=196.5  "expansion". Capital exists at any time in numerous large and small blo"
+    y=638.1  ""accumulation through expansion" is rare, and at best transitory, a co"
+    y=651.9  "between the two is useful. And a crucial feature of the new phase of i"
+    y=665.7  "increase in the relative importance of "accumulation through encroachm"
+    y=679.5  "not to claim that the more familiar phenomena such as expansion of the"
+    y=693.3  "financed by the flow of profits, technological progress embodied in ne"
+    y=726.9  "1Marx (1974, 263) talks of "this constant expansion of capital, hence "
+    y=742.7  "expansion of production, on the basis of the old method of production "
+    y=756.5  "while new methods are already being introduced at its side..". "
+
+============================================================
+PAGE 2
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 1
+
+  Region 0: Text
+    PDF coords: (149,211) → (446,631)
+    Image coords: (310,440) → (930,1314)
+    Lines matched: 30
+    Text: "increasingly become domains of private sector operation and hence provinces of p..."
+
+  ⚠️  ORPHANED LINES: 17
+    y=72.3  "innovations of altogether new spheres of production, have ceased to ex"
+    y=86.1  "assert that alongside these familiar phenomena (which in any case unde"
+    y=99.9  "centralization) there has been a veritable upsurge of "accumulation th"
+    y=127.5  "All over the capitalist world, and especially in the third world, "dis"
+    y=141.3  "State sector equity and "privatization" of State sector assets, invari"
+    y=155.1  "prices, is a pronounced phenomenon. This is nothing else but private e"
+    y=168.9  "expense of the State, or private accumulation through an expropriation"
+    y=182.7  "Likewise all over the capitalist world, especially the third world, pu"
+    y=196.5  "and energy, and public provisioning of social services like education "
+    y=486.3  "2. "
+    y=638.1  "capital on a global scale, a shift in the terms of trade against the p"
+    y=651.9  "primary commodity producers who become easy preys for expropriation, a"
+    y=665.7  "of the State sector which becomes increasingly privatized and whose do"
+    y=677.5  "as a province of private accumulation2. In short, deflation is accompa"
+    y=693.3  "through encroachment. "
+    y=720.9  " This deflation, needless to say, is not confined to the third world; "
+    y=754.5  "2For a more extensive discussion of the implications of global deflati"
+
+============================================================
+PAGE 3
+============================================================
+  Page size: 595×842 pts
+  Image size: 1240×1755 px
+  Regions detected: 1
+
+  Region 0: Text
+    PDF coords: (149,211) → (446,631)
+    Image coords: (310,440) → (930,1314)
+    Lines matched: 29
+    Text: "Since the term "finance capital" was used extensively around the time of the fir..."
+
+  ⚠️  ORPHANED LINES: 18
+    y=72.3  "phenomenon. And the main driving force behind it is international fina"
+    y=86.1  "emerged in an altogether new form in the recent years. The global tend"
+    y=99.9  "adoption of deflationary policies has often been called "a retreat of "
+    y=113.7  "misnomer: what we are witnessing is not a "retreat of the State" but a"
+    y=127.5  "its intervention, from intervention carried out in its guise of a supr"
+    y=141.3  "ostensible benefit of the "people as a whole", to intervention carried"
+    y=155.1  "interests of international finance capital, with the support of the la"
+    y=168.9  "which increasingly encompass the bulk of the large bourgeoisie, upper "
+    y=182.7  "collaborationist "globalized" elite. "
+    y=417.3  "world). "
+    y=651.9  "At the same time, there is a palpable slowing down of the growth of th"
+    y=665.7  "economy on account of the global pursuit of deflationary policies. Ind"
+    y=679.5  "is precisely the other side of "accumulation through encroachment". Th"
+    y=693.3  "post-war boom (the so-called "Golden Age of Capitalism") was by contra"
+    y=707.1  "such encroachments were comparatively limited, a prominent State secto"
+    y=720.9  "appearance everywhere, and third world economies, behind protectionist"
+    y=734.7  "rates of growth unprecedented in their recent history. The universaliz"
+    y=748.5  "policies and the ubiquitous pursuit of deflation which reflected the r"

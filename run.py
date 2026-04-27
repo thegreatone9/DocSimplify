@@ -46,13 +46,42 @@ from config import (
     BOOK_SUMMARY_FILE, SIMPLIFIED_CHUNKS_FILE, CHECKPOINT_FILE,
     MODEL_NAME, OLLAMA_BASE_URL, TEMPERATURE,
     MAX_CHUNK_TOKENS, OVERLAP_TOKENS,
-    VERIFY_CHUNKS, MIN_ACCEPTABLE_RATIO, MAX_ACCEPTABLE_RATIO,
+    MIN_ACCEPTABLE_RATIO, MAX_ACCEPTABLE_RATIO,
     MAX_RETRIES, MAX_WORKERS,
     GEMINI_API_KEY, GEMINI_MODEL,
     GROQ_API_KEY, GROQ_MODEL,
 )
 
 SUPPORTED_EXTENSIONS = {".pdf", ".epub"}
+
+
+# ── Logging: tee all output to a log file ─────────────────────────────────────
+class _TeeWriter:
+    """Write to both a file and the original stream (stdout/stderr)."""
+    def __init__(self, stream, log_file):
+        self.stream = stream
+        self.log_file = log_file
+    def write(self, data):
+        self.stream.write(data)
+        self.log_file.write(data)
+        self.log_file.flush()
+    def flush(self):
+        self.stream.flush()
+        self.log_file.flush()
+
+_log_handle = None
+
+def _setup_logging():
+    """Set up tee logging to data/output/run_log.txt."""
+    global _log_handle
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = OUTPUT_DIR / f"run_log_{timestamp}.txt"
+    _log_handle = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _TeeWriter(sys.__stdout__, _log_handle)
+    sys.stderr = _TeeWriter(sys.__stderr__, _log_handle)
+    print(f"  📝 Log file: {log_path}")
 
 
 def _find_input_file() -> Path:
@@ -83,6 +112,7 @@ def _find_input_file() -> Path:
 
 
 def main():
+    _setup_logging()
     parser = argparse.ArgumentParser(
         description="Simplify a PDF or EPUB book into plain-English Markdown.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -103,14 +133,15 @@ Options:
     )
     parser.add_argument("--workers", type=int, default=MAX_WORKERS,
                         help=f"Parallel LLM workers (default: {MAX_WORKERS}, use 1 for sequential)")
-    parser.add_argument("--no-verify", action="store_true",
-                        help="Skip the verification pass (faster)")
+
     parser.add_argument("--resume", action="store_true",
                         help="Resume from last checkpoint (don't re-extract)")
     parser.add_argument("--model", default=MODEL_NAME,
                         help=f"Ollama model name (default: {MODEL_NAME})")
     parser.add_argument("--surya", action="store_true",
                         help="Use surya neural layout model (for scanned/image-heavy PDFs)")
+    parser.add_argument("--paddle", action="store_true",
+                        help="Use PaddleOCR layout detection (recommended for academic PDFs)")
     parser.add_argument("--gemini", action="store_true",
                         help="Use Gemini API (requires GEMINI_API_KEY in config)")
     parser.add_argument("--groq", action="store_true",
@@ -123,10 +154,11 @@ Options:
     # ── Auto-detect input file ───────────────────────────────────────────────
     input_path = _find_input_file()
     ext = input_path.suffix.lower()
-    verify = VERIFY_CHUNKS and not args.no_verify
+
     workers = args.workers
     model = args.model
     use_surya = args.surya
+    use_paddle = args.paddle
     use_gemini = args.gemini
     use_groq = args.groq
 
@@ -144,8 +176,16 @@ Options:
     if args.paragraph:
         workers = 1
 
-    # Check surya availability if requested
-    if use_surya:
+    # Check layout engine availability
+    if use_paddle:
+        try:
+            from paddleocr import LayoutDetection
+            print("  ✅ PaddleOCR layout model available")
+        except ImportError:
+            print("  ❌ PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr")
+            print("     Falling back to heuristic parser.")
+            use_paddle = False
+    elif use_surya:
         try:
             from surya.layout import FoundationPredictor, LayoutPredictor
             print("  ✅ Surya neural layout model available")
@@ -158,14 +198,17 @@ Options:
     output_name = input_path.stem + "_simplified.md"
     output_path = OUTPUT_DIR / output_name
 
-    # ── Default: start fresh. Only keep checkpoint if --resume is passed ──
+    # ── Default: start fresh. Only keep intermediate files if --resume is passed ──
     if not args.resume:
-        for stale_file in [CHECKPOINT_FILE, SIMPLIFIED_CHUNKS_FILE, output_path]:
-            if Path(stale_file).exists():
-                Path(stale_file).unlink()
+        # Clear ALL intermediate and output files to ensure clean state
+        import glob
+        for stale_file in glob.glob(str(INTERMEDIATE_DIR / "*")):
+            Path(stale_file).unlink()
+        if output_path.exists():
+            output_path.unlink()
         print("  🆕 Starting fresh (use --resume to continue a previous run)")
 
-    extraction_mode = "surya (neural)" if use_surya else "heuristic (font/position)"
+    extraction_mode = "PaddleOCR (neural)" if use_paddle else ("surya (neural)" if use_surya else "heuristic (font/position)")
     llm_mode = "Gemini API" if use_gemini else ("Groq API" if use_groq else f"Ollama ({model})")
     print(f"""
 ╔══════════════════════════════════════════════════╗
@@ -175,7 +218,7 @@ Options:
   LLM:     {llm_mode}
   Parser:   {extraction_mode}
   Workers:  {workers} ({'parallel' if workers > 1 else 'sequential + context'})
-  Verify:   {'ON' if verify else 'OFF'}
+
   Output:   {output_path.name}
 """)
 
@@ -247,7 +290,13 @@ Options:
     else:
         _step("3/10", "Extraction & Chunking")
 
-        if ext == ".pdf" and use_surya:
+        if ext == ".pdf" and use_paddle:
+            from src.pdf_parser import extract_pdf_with_paddle, detect_chapters, validate_extraction
+            print("  🧠 Running PaddleOCR layout detection...")
+            markdown, paddle_structure = extract_pdf_with_paddle(input_path)
+            chapters = detect_chapters(markdown)
+            report = validate_extraction(chapters, input_path)
+        elif ext == ".pdf" and use_surya:
             from src.pdf_parser import extract_pdf_with_surya, detect_chapters, validate_extraction
             print("  🧠 Running surya neural layout detection (this may take a few minutes)...")
             markdown, surya_structure = extract_pdf_with_surya(input_path)
@@ -284,6 +333,13 @@ Options:
 
         print(f"  {len(chapters)} sections → {stats['total_chunks']} chunks ")
         print(f"  {stats['total_tokens']:,} tokens, est. ~{stats['estimated_minutes']:.0f} min")
+
+        # Paragraph audit: after chunking
+        _input_para_count = sum(
+            len([p.strip() for p in c['text'].split('\n\n') if p.strip()])
+            for c in chunks
+        )
+        print(f"  📊 Paragraph count after chunking: {_input_para_count}")
 
         # Save intermediate files
         INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -385,12 +441,21 @@ Options:
         max_retries=MAX_RETRIES,
         max_workers=workers,
         checkpoint_path=CHECKPOINT_FILE,
-        verify=verify,
+
         paragraph_mode=args.paragraph,
     )
 
     with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
         json.dump(output_chunks, f, ensure_ascii=False, indent=2)
+
+    # Paragraph audit: after simplification
+    _simp_para_count = sum(
+        len([p.strip() for p in c.get('simplified_text', '').split('\n\n') if p.strip()])
+        for c in output_chunks
+    )
+    print(f"\n  📊 Paragraph count after simplification: {_simp_para_count} (input was {_input_para_count})")
+    if _simp_para_count != _input_para_count:
+        print(f"     ⚠️  Drift: {_simp_para_count - _input_para_count:+d} paragraphs")
 
     # ── Step 5b: Embedding QA ────────────────────────────────────────────────
     from src.embedding_qa import is_available as embedding_available, run_embedding_qa
@@ -449,8 +514,17 @@ Options:
     )
 
     # doc_metadata was built from the scan in Step 4 — no file reload needed
-    trimmed = trim_overlaps(output_chunks, overlap_tokens=OVERLAP_TOKENS)
+    if OVERLAP_TOKENS > 0:
+        trimmed = trim_overlaps(output_chunks, overlap_tokens=OVERLAP_TOKENS)
+    else:
+        trimmed = output_chunks  # No overlap to trim
     book_md = assemble_book(trimmed, chapters, metadata=doc_metadata)
+
+    # Paragraph audit: after assembly
+    _output_para_count = len([p.strip() for p in book_md.split('\n\n') if p.strip()])
+    print(f"\n  📊 Paragraph count after assembly: {_output_para_count} (input was {_input_para_count})")
+    if _output_para_count != _input_para_count:
+        print(f"     ⚠️  Drift: {_output_para_count - _input_para_count:+d} paragraphs")
 
     # Concept map
     from src.simplifier import generate_concept_map

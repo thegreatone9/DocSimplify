@@ -401,6 +401,60 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
         # Check if this page has embedded text
         page_has_text = len(page.get_text("text").strip()) > 50
 
+        # ── Get ALL text spans with positions and font sizes (no clipping) ──
+        page_spans = []
+        if page_has_text:
+            text_dict = page.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)
+            for block in text_dict.get("blocks", []):
+                if block.get("type") != 0:  # text blocks only
+                    continue
+                for line in block.get("lines", []):
+                    line_bbox = line["bbox"]  # (x0, y0, x1, y1) in PDF points
+                    spans = line.get("spans", [])
+                    line_text = "".join(span["text"] for span in spans)
+                    # Weighted average font size for this line
+                    total_chars = sum(len(span["text"]) for span in spans)
+                    avg_size = (
+                        sum(span["size"] * len(span["text"]) for span in spans)
+                        / max(total_chars, 1)
+                    )
+                    if line_text.strip():
+                        page_spans.append({
+                            "text": line_text,
+                            "y0": line_bbox[1],
+                            "y1": line_bbox[3],
+                            "x0": line_bbox[0],
+                            "x1": line_bbox[2],
+                            "font_size": avg_size,
+                        })
+
+        # Compute median body font size for this page
+        all_sizes = [s["font_size"] for s in page_spans if s["font_size"] > 0]
+        all_sizes.sort()
+        median_font_size = all_sizes[len(all_sizes) // 2] if all_sizes else 12.0
+        page_height = page_rect.height
+
+        # ── Detect footnote separator line on this page ──────────────
+        # Footnote separators are thin horizontal rules (lines or rects)
+        # in the bottom half of the page, spanning > 20% of page width.
+        footnote_separator_y = None
+        page_width = page_rect.width
+        for drawing in page.get_drawings():
+            for item in drawing.get("items", []):
+                if item[0] == "l":  # line
+                    p1, p2 = item[1], item[2]
+                    if (abs(p1.y - p2.y) < 3
+                        and abs(p1.x - p2.x) > page_width * 0.2
+                        and p1.y > page_height * 0.5):
+                        footnote_separator_y = p1.y
+                elif item[0] == "re":  # thin rectangle (used as rule)
+                    rect = item[1]
+                    if (rect.height < 3
+                        and rect.width > page_width * 0.2
+                        and rect.y0 > page_height * 0.5):
+                        footnote_separator_y = rect.y0
+
+        # ── Group spans into surya's detected regions ────────────────
         for box in sorted(result.bboxes, key=lambda b: b.polygon[0][1]):
             label = box.label
             region_counts[label] = region_counts.get(label, 0) + 1
@@ -408,18 +462,92 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
             xs = [p[0] for p in box.polygon]
             ys = [p[1] for p in box.polygon]
 
-            # Try PyMuPDF text extraction first (faster, higher quality)
+            # Convert surya image coords → PDF point coords
+            region_y0 = min(ys) * scale_y
+            region_y1 = max(ys) * scale_y
+            region_x0 = min(xs) * scale_x
+            region_x1 = max(xs) * scale_x
+
             text = ""
-            if page_has_text:
-                rect = pymupdf.Rect(
-                    min(xs) * scale_x, min(ys) * scale_y,
-                    max(xs) * scale_x, max(ys) * scale_y,
-                )
-                text = page.get_text("text", clip=rect).strip()
+            region_font_size = median_font_size
+            if page_has_text and page_spans:
+                # Collect spans whose vertical center falls within this region
+                matching_lines = []
+                for span in page_spans:
+                    span_cy = (span["y0"] + span["y1"]) / 2
+                    span_cx = (span["x0"] + span["x1"]) / 2
+                    # Check Y overlap (primary) and X overlap (for multi-column)
+                    if region_y0 - 5 <= span_cy <= region_y1 + 5:
+                        if region_x0 - 20 <= span_cx <= region_x1 + 20:
+                            matching_lines.append(span)
+
+                # Sort by Y then X for reading order
+                matching_lines.sort(key=lambda s: (s["y0"], s["x0"]))
+
+                # ── Filter out footnote lines trapped inside this region ──
+                # If surya drew one box spanning body + footnotes, strip
+                # lines below the separator before paragraph splitting.
+                if footnote_separator_y and matching_lines:
+                    body_lines = []
+                    for ml in matching_lines:
+                        if ml["y0"] >= footnote_separator_y - 5:
+                            # This line is below the separator → footnote
+                            fn_text = ml["text"].strip()
+                            if fn_text:
+                                footnotes.append(fn_text)
+                        else:
+                            body_lines.append(ml)
+                    matching_lines = body_lines
+
+                # ── Coordinate-based paragraph splitting ──────────────
+                # Even if surya drew one big box, detect paragraph breaks
+                # using (a) vertical gaps and (b) first-line indentation.
+                if len(matching_lines) >= 2:
+                    # Compute median line gap and body left margin
+                    gaps = []
+                    left_xs = []
+                    for k in range(len(matching_lines)):
+                        left_xs.append(matching_lines[k]["x0"])
+                        if k > 0:
+                            gap = matching_lines[k]["y0"] - matching_lines[k - 1]["y1"]
+                            if gap > 0:
+                                gaps.append(gap)
+                    median_gap = sorted(gaps)[len(gaps) // 2] if gaps else 0
+                    left_xs.sort()
+                    body_left = left_xs[len(left_xs) // 4] if left_xs else 0  # 25th percentile
+
+                    # Build text with paragraph breaks
+                    parts = [matching_lines[0]["text"].strip()]
+                    for k in range(1, len(matching_lines)):
+                        cur = matching_lines[k]
+                        prev = matching_lines[k - 1]
+                        gap = cur["y0"] - prev["y1"]
+
+                        # Signal 1: large vertical gap (> 1.5× median)
+                        big_gap = median_gap > 0 and gap > median_gap * 1.5
+
+                        # Signal 2: first-line indentation (> 8pt right of body margin)
+                        indented = cur["x0"] > body_left + 8
+
+                        # Require BOTH signals — gap alone or indent alone
+                        # causes false splits (e.g. section numbers like "2."
+                        # on their own line, or footnote superscripts).
+                        if big_gap and indented:
+                            parts.append("\n\n")
+                        else:
+                            parts.append(" ")
+                        parts.append(cur["text"].strip())
+
+                    text = "".join(parts)
+                else:
+                    text = " ".join(s["text"].strip() for s in matching_lines if s["text"].strip())
+
+                # Average font size for this region
+                if matching_lines:
+                    region_font_size = sum(s["font_size"] for s in matching_lines) / len(matching_lines)
 
             # Fall back to surya OCR for scanned pages
             if not text and recognition_pred and detection_pred:
-                # Crop the region from the page image
                 crop_box = (int(min(xs)), int(min(ys)),
                             int(max(xs)), int(max(ys)))
                 region_img = images[page_idx].crop(crop_box)
@@ -434,7 +562,24 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
             if not text:
                 continue
 
-            if label in ("Footnote", "PageFooter"):
+            # ── Footnote detection ────────────────────────────────────
+            # Priority 1: surya labeled it as Footnote/PageFooter
+            # Priority 2: text is below a detected separator line + starts with digit
+            # Priority 3: fallback heuristic (bottom + small font + digit)
+            is_footnote = label in ("Footnote", "PageFooter")
+            if not is_footnote and label in ("Text", "TextBlock"):
+                starts_with_digit = bool(re.match(r'^\d', text.strip()))
+                if footnote_separator_y and region_y0 >= footnote_separator_y - 5 and starts_with_digit:
+                    # Below the separator line and starts with a number → footnote
+                    is_footnote = True
+                elif not footnote_separator_y:
+                    # No separator found — fall back to font-size heuristic
+                    in_bottom = region_y1 > page_height * 0.70
+                    small_font = region_font_size <= median_font_size * 0.85
+                    if in_bottom and small_font and starts_with_digit:
+                        is_footnote = True
+
+            if is_footnote:
                 footnotes.append(text.replace("\n", " "))
             elif label in ("PageHeader",):
                 pass  # Strip page headers
@@ -454,7 +599,33 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
     doc.close()
 
     # ── Assemble markdown ────────────────────────────────────────────────
-    body_paragraphs = [p["text"].replace("\n", " ") for p in body_parts]
+    # A single surya region may now contain \n\n paragraph breaks from
+    # coordinate-based splitting. Expand those into separate paragraphs.
+    body_paragraphs = []
+    for p in body_parts:
+        raw = p["text"]
+        # Split on our inserted paragraph breaks
+        sub_paras = re.split(r'\n{2,}', raw)
+        for sp in sub_paras:
+            cleaned = sp.replace("\n", " ").strip()
+            if cleaned:
+                body_paragraphs.append(cleaned)
+
+    # ── Merge false paragraph splits ─────────────────────────────────────
+    # Surya sometimes draws two bounding boxes for one paragraph.
+    # Heuristic: if a paragraph starts lowercase and the previous one
+    # doesn't end with terminal punctuation, merge them.
+    merged = []
+    for para in body_paragraphs:
+        if (merged
+            and para
+            and para[0].islower()
+            and not re.search(r'[.!?:]\s*$', merged[-1])):
+            merged[-1] = merged[-1].rstrip() + " " + para
+        else:
+            merged.append(para)
+    body_paragraphs = merged
+
     body_md = "\n\n".join(body_paragraphs)
 
     if footnotes:
@@ -480,6 +651,270 @@ def extract_pdf_with_surya(pdf_path: str | Path) -> tuple[str, dict]:
         print(f"  📷 Used OCR for text extraction")
 
     return body_md, surya_structure
+
+
+def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict]:
+    """
+    Extract PDF text using PaddleOCR's LayoutDetection for layout analysis.
+
+    Uses PaddleOCR's PP-DocLayout model which detects regions far more
+    accurately than surya on single-column academic PDFs. Text is still
+    extracted from PyMuPDF's span data (not OCR), so this is fast and
+    accurate for native PDFs.
+
+    Args:
+        pdf_path: Path to the PDF.
+
+    Returns:
+        Tuple of (markdown_text, structure_info):
+          - markdown_text: Full document as Markdown with footnotes separated
+          - structure_info: Dict with region counts and types detected
+    """
+    import numpy as np
+    from PIL import Image
+    from paddleocr import LayoutDetection
+
+    pdf_path = Path(pdf_path)
+    doc = pymupdf.open(str(pdf_path))
+
+    # ── Render all pages as images ───────────────────────────────────────
+    print(f"  📐 Rendering {len(doc)} pages...")
+    images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=150)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        images.append(img)
+
+    # ── Load PaddleOCR layout model ──────────────────────────────────────
+    print(f"  🧠 Loading PaddleOCR layout model...")
+    layout_engine = LayoutDetection()
+
+    # ── Run layout detection on each page ────────────────────────────────
+    print(f"  🔍 Detecting layout on {len(images)} pages...")
+
+    body_parts = []
+    footnotes = []
+    region_counts = {}
+
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        page_rect = page.rect
+        img_w, img_h = images[page_idx].size
+        scale_x = page_rect.width / img_w
+        scale_y = page_rect.height / img_h
+
+        # Check if this page has embedded text
+        page_has_text = len(page.get_text("text").strip()) > 50
+
+        # ── Get ALL text spans with positions and font sizes ─────────
+        page_spans = []
+        if page_has_text:
+            text_dict = page.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)
+            for block in text_dict.get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    line_bbox = line["bbox"]
+                    spans = line.get("spans", [])
+                    line_text = "".join(span["text"] for span in spans)
+                    total_chars = sum(len(span["text"]) for span in spans)
+                    avg_size = (
+                        sum(span["size"] * len(span["text"]) for span in spans)
+                        / max(total_chars, 1)
+                    )
+                    if line_text.strip():
+                        page_spans.append({
+                            "text": line_text,
+                            "y0": line_bbox[1],
+                            "y1": line_bbox[3],
+                            "x0": line_bbox[0],
+                            "x1": line_bbox[2],
+                            "font_size": avg_size,
+                        })
+
+        # Compute median body font size for this page
+        all_sizes = [s["font_size"] for s in page_spans if s["font_size"] > 0]
+        all_sizes.sort()
+        median_font_size = all_sizes[len(all_sizes) // 2] if all_sizes else 12.0
+        page_height = page_rect.height
+
+        # ── Detect footnote separator line ────────────────────────────
+        footnote_separator_y = None
+        page_width = page_rect.width
+        for drawing in page.get_drawings():
+            for item in drawing.get("items", []):
+                if item[0] == "l":
+                    p1, p2 = item[1], item[2]
+                    if (abs(p1.y - p2.y) < 3
+                        and abs(p1.x - p2.x) > page_width * 0.2
+                        and p1.y > page_height * 0.5):
+                        footnote_separator_y = p1.y
+                elif item[0] == "re":
+                    rect = item[1]
+                    if (rect.height < 3
+                        and rect.width > page_width * 0.2
+                        and rect.y0 > page_height * 0.5):
+                        footnote_separator_y = rect.y0
+
+        # ── Run PaddleOCR layout detection ────────────────────────────
+        img_np = np.array(images[page_idx])
+        raw_result = layout_engine.predict(img_np)
+        det = raw_result[0]
+        boxes = det['boxes']
+
+        # ── Process each detected region ─────────────────────────────
+        for box in sorted(boxes, key=lambda b: b['coordinate'][1]):
+            label = box['label']
+            region_counts[label] = region_counts.get(label, 0) + 1
+
+            coord = box['coordinate']
+            # Paddle coords are in image pixels
+            region_x0 = float(coord[0]) * scale_x
+            region_y0 = float(coord[1]) * scale_y
+            region_x1 = float(coord[2]) * scale_x
+            region_y1 = float(coord[3]) * scale_y
+
+            text = ""
+            region_font_size = median_font_size
+            if page_has_text and page_spans:
+                # Collect spans whose vertical center falls within this region
+                matching_lines = []
+                for span in page_spans:
+                    span_cy = (span["y0"] + span["y1"]) / 2
+                    span_cx = (span["x0"] + span["x1"]) / 2
+                    if region_y0 - 5 <= span_cy <= region_y1 + 5:
+                        if region_x0 - 20 <= span_cx <= region_x1 + 20:
+                            matching_lines.append(span)
+
+                # Sort by Y then X for reading order
+                matching_lines.sort(key=lambda s: (s["y0"], s["x0"]))
+
+                # ── Filter out footnote lines trapped inside this region ──
+                if footnote_separator_y and matching_lines:
+                    body_lines = []
+                    for ml in matching_lines:
+                        if ml["y0"] >= footnote_separator_y - 5:
+                            fn_text = ml["text"].strip()
+                            if fn_text:
+                                footnotes.append(fn_text)
+                        else:
+                            body_lines.append(ml)
+                    matching_lines = body_lines
+
+                # ── Coordinate-based paragraph splitting ──────────────
+                if len(matching_lines) >= 2:
+                    gaps = []
+                    left_xs = []
+                    for k in range(len(matching_lines)):
+                        left_xs.append(matching_lines[k]["x0"])
+                        if k > 0:
+                            gap = matching_lines[k]["y0"] - matching_lines[k - 1]["y1"]
+                            if gap > 0:
+                                gaps.append(gap)
+                    median_gap = sorted(gaps)[len(gaps) // 2] if gaps else 0
+                    left_xs.sort()
+                    body_left = left_xs[len(left_xs) // 4] if left_xs else 0
+
+                    parts = [matching_lines[0]["text"].strip()]
+                    for k in range(1, len(matching_lines)):
+                        cur = matching_lines[k]
+                        prev = matching_lines[k - 1]
+                        gap = cur["y0"] - prev["y1"]
+
+                        big_gap = median_gap > 0 and gap > median_gap * 1.5
+                        indented = cur["x0"] > body_left + 8
+
+                        if big_gap and indented:
+                            parts.append("\n\n")
+                        else:
+                            parts.append(" ")
+                        parts.append(cur["text"].strip())
+
+                    text = "".join(parts)
+                else:
+                    text = " ".join(s["text"].strip() for s in matching_lines if s["text"].strip())
+
+                # Average font size for this region
+                if matching_lines:
+                    region_font_size = sum(s["font_size"] for s in matching_lines) / len(matching_lines)
+
+            if not text:
+                continue
+
+            # ── Footnote detection ────────────────────────────────────
+            is_footnote = label in ("footnote", "footer")
+            if not is_footnote and label in ("text",):
+                starts_with_digit = bool(re.match(r'^\d', text.strip()))
+                if footnote_separator_y and region_y0 >= footnote_separator_y - 5 and starts_with_digit:
+                    is_footnote = True
+                elif not footnote_separator_y:
+                    in_bottom = region_y1 > page_height * 0.70
+                    small_font = region_font_size <= median_font_size * 0.85
+                    if in_bottom and small_font and starts_with_digit:
+                        is_footnote = True
+
+            if is_footnote:
+                footnotes.append(text.replace("\n", " "))
+            elif label in ("header",):
+                pass  # Strip page headers
+            else:
+                if label == "title":
+                    text = f"# {text}"
+
+                body_parts.append({
+                    "page": page_idx + 1,
+                    "label": label,
+                    "text": text,
+                    "y": float(coord[1]),
+                })
+
+    doc.close()
+
+    # ── Assemble markdown ────────────────────────────────────────────────
+    body_paragraphs = []
+    for p in body_parts:
+        raw = p["text"]
+        sub_paras = re.split(r'\n{2,}', raw)
+        for sp in sub_paras:
+            cleaned = sp.replace("\n", " ").strip()
+            if cleaned:
+                body_paragraphs.append(cleaned)
+
+    # ── Merge false paragraph splits ─────────────────────────────────────
+    merged = []
+    for para in body_paragraphs:
+        if (merged
+            and para
+            and para[0].islower()
+            and not re.search(r'[.!?:]\s*$', merged[-1])):
+            merged[-1] = merged[-1].rstrip() + " " + para
+        else:
+            merged.append(para)
+    body_paragraphs = merged
+
+    body_md = "\n\n".join(body_paragraphs)
+
+    if footnotes:
+        body_md += "\n\n---\n\n**Original Document Footnotes:**\n\n"
+        for fn in footnotes:
+            body_md += f"- {fn}\n"
+
+    body_md = re.sub(r"\n{4,}", "\n\n\n", body_md)
+
+    structure = {
+        "extraction_mode": "paddle",
+        "total_pages": len(images),
+        "region_counts": region_counts,
+        "total_regions": sum(region_counts.values()),
+        "footnotes_found": len(footnotes),
+        "is_scanned": False,
+    }
+
+    print(f"  📊 Paddle detected: {structure['total_regions']} regions across {len(images)} pages")
+    for label, count in sorted(region_counts.items()):
+        print(f"     {label}: {count}")
+
+    return body_md, structure
 
 
 def extract_pdf_metadata(pdf_path: str | Path) -> dict:

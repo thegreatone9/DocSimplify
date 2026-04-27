@@ -196,10 +196,10 @@ def assemble_book(
                     parts.append(f"\n\n## {chapter_name}\n")
 
 
-                if section_name:
+                if section_name and _is_valid_heading(section_name):
                     parts.append(f"\n### {section_name}\n")
 
-            elif section_name and is_chapter_start:
+            elif section_name and is_chapter_start and _is_valid_heading(section_name):
                 parts.append(f"\n### {section_name}\n")
 
         parts.append(text)
