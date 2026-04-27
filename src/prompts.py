@@ -383,32 +383,32 @@ TEXT SAMPLE:
 
 def build_summary_prompt(chapter_intros: str) -> tuple[str, str]:
     """
-    Build prompts to generate a book-level summary from chapter introductions.
+    Build prompts to generate a document-level summary from section introductions.
 
     Args:
-        chapter_intros: Concatenated introductory text from each chapter.
+        chapter_intros: Concatenated introductory text from each section.
 
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a skilled book analyst. You read introductory passages from 
-each chapter of a book and produce a concise, accurate overview of the book's topic, 
+    system_prompt = """You are a skilled document analyst. You read introductory passages from 
+each section of a document and produce a concise, accurate overview of the document's topic, 
 purpose, and main themes."""
 
-    user_prompt = f"""Below are the opening passages from each chapter of a book. Based on 
+    user_prompt = f"""Below are the opening passages from each section of a document. Based on 
 these excerpts, write a concise overview (about 300-500 words) that describes:
 
-1. What this book is about (main topic/subject)
+1. What this document is about (main topic/subject)
 2. Who the intended audience seems to be
-3. The main themes or arguments the book explores
+3. The main themes or arguments the document explores
 4. The overall structure or progression of ideas
 
 Write in clear, plain English. This summary will be used to provide context when 
-simplifying individual sections of the book.
+simplifying individual sections of the document.
 
 Output ONLY the summary, no other text.
 
-CHAPTER OPENINGS:
+SECTION OPENINGS:
 {chapter_intros}"""
 
     return system_prompt, user_prompt
@@ -542,41 +542,46 @@ TEXT:
     return system_prompt, user_prompt
 
 
-def build_formatting_prompt(markdown_text: str) -> tuple[str, str]:
+def build_intro_prompt(
+    doc_summary: str,
+    title: str = "",
+    author: str = "",
+) -> tuple[str, str]:
     """
-    Build a prompt for a final formatting pass over the output markdown.
+    Build a prompt to generate a short reader-facing introduction.
 
-    Asks the LLM to add proper markdown heading formatting (##, ###)
-    and bold key terms, without changing any content.
+    This creates a 2-3 sentence orientation that sets context for the reader
+    and invites them into the body text.
 
     Args:
-        markdown_text: The complete assembled markdown output.
+        doc_summary: The generated document summary.
+        title:       Document title.
+        author:      Author name.
 
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You are a markdown formatter. Your ONLY job is to add proper heading 
-formatting to a document. You must NOT change any words, sentences, or paragraphs.
+    system_prompt = """You write brief, engaging introductions for simplified academic texts. 
+Your intro should orient the reader and make them want to read on.
 
 RULES:
-1. Identify section headers and format them as ## (major sections) or ### (subsections).
-   Section headers are typically: numbered points ("1.", "2."), standalone short lines that 
-   introduce a new topic, or lines that were clearly headings in the original.
-2. If a paragraph starts with a section number like "2." or "6." followed by a topic shift, 
-   extract just the number as a heading: "## 2." and keep the body text as the paragraph.
-   Do NOT do this if the number is part of a regular sentence flow.
-3. Bold key terms, proper nouns, and important concepts when they first appear — but sparingly.
-   Do NOT bold entire sentences or common words.
-4. Keep the # title and *By Author* exactly as they are.
-5. Do NOT add, remove, merge, or split any paragraphs.
-6. Do NOT change any wording. Output the EXACT same text with only formatting changes.
-7. Preserve all footnote markers [^N] exactly.
-8. Output the COMPLETE document — do not truncate or summarize."""
+1. Write exactly 2-3 sentences.
+2. First sentence: What is this text about? (topic + author's main question/argument)
+3. Second sentence: Why does it matter? (stakes, relevance, or what the reader will learn)
+4. Optional third sentence: A hook that transitions into the body text.
+5. Write in second person ("you") or impersonal style — NOT "the author argues".
+6. Do NOT use academic jargon. Write at a newspaper level.
+7. Do NOT use the word "book", "essay", or "paper". Always refer to it as "this document".
+8. Output ONLY the introduction text, nothing else."""
 
-    user_prompt = f"""Add proper markdown heading formatting to this document. 
-Do NOT change any content — only add ## headings, ### subheadings, and **bold** key terms.
-Output the COMPLETE formatted document.
+    user_prompt = f"""Write a 2-3 sentence introduction for this simplified academic text.
 
-{markdown_text}"""
+Title: {title}
+Author: {author}
+Document summary: {doc_summary}
+
+The introduction should orient a general reader and invite them to read on. 
+Do NOT call it a "book", "essay", or "paper" — always say "document".
+Output ONLY the introduction text."""
 
     return system_prompt, user_prompt

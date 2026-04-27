@@ -141,6 +141,10 @@ def assemble_book(
         parts.append(f"# {title}\n")
         if author:
             parts.append(f"*By {author}*\n")
+        # Insert reader-facing introduction if available
+        intro = metadata.get("intro")
+        if intro:
+            parts.append(f"\n> {intro}\n")
         parts.append("---\n")
 
     # ── Validate chapter names against scan-derived sections ──────────────────

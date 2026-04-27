@@ -701,8 +701,16 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
     footnotes = []
     region_counts = {}
 
+    skipped_pages = []
     for page_idx in range(len(doc)):
         page = doc[page_idx]
+
+        # Skip blank pages
+        page_text = page.get_text("text").strip()
+        if not page_text:
+            skipped_pages.append(page_idx + 1)
+            continue
+
         page_rect = page.rect
         img_w, img_h = images[page_idx].size
         scale_x = page_rect.width / img_w
@@ -961,6 +969,40 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
         if in_references and block["section_type"] == "BODY":
             block["section_type"] = "REFERENCES"
 
+    # ── Absorb frontmatter fragments ─────────────────────────────────────
+    # Short text blocks (<50 words) before the first substantial paragraph
+    # are frontmatter (bylines, citations, blurbs, dates, affiliations).
+    # Rule: on pages T and T+1 (T = title page), absorb short text blocks
+    # until we hit a text block with ≥50 words.
+    # Fallback (no title): absorb leading short text blocks on any page.
+    title_page = None
+    for block in labeled_blocks:
+        if block["label"] in ("doc_title", "title"):
+            title_page = block["page"]
+            break
+
+    absorbed = 0
+    for block in labeled_blocks:
+        if block["section_type"] != "BODY":
+            continue
+
+        word_count = len(block["text"].split())
+
+        if word_count >= 50:
+            # First substantial paragraph — stop absorbing
+            break
+
+        # Check page constraint: title page and next page, or any page if no title
+        if title_page is not None:
+            if block["page"] > title_page + 1:
+                break  # Past the frontmatter zone
+        
+        block["section_type"] = "FRONT_MATTER"
+        absorbed += 1
+
+    if absorbed:
+        print(f"  📋 Absorbed {absorbed} frontmatter fragment(s) (short blocks before first body paragraph)")
+
     # ── Merge false paragraph splits within text blocks ──────────────────
     for block in labeled_blocks:
         if block["section_type"] != "BODY":
@@ -1018,6 +1060,8 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
     }
 
     print(f"  📊 Paddle detected: {structure['total_regions']} regions across {len(images)} pages")
+    if skipped_pages:
+        print(f"  🗑️  Skipped {len(skipped_pages)} empty pages: {skipped_pages}")
     for label, count in sorted(region_counts.items()):
         print(f"     {label}: {count}")
 

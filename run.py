@@ -148,6 +148,10 @@ Options:
                         help="Use Groq API with Llama 3.3 70B (fast, free, generous limits)")
     parser.add_argument("--paragraph", action="store_true",
                         help="Simplify paragraph-by-paragraph (better quality for weaker models)")
+    parser.add_argument("--title", type=str, default=None,
+                        help="Override document title (otherwise auto-detected from PDF)")
+    parser.add_argument("--author", type=str, default=None,
+                        help="Override author name (otherwise auto-detected from PDF)")
 
     args = parser.parse_args()
 
@@ -437,14 +441,21 @@ Options:
             for b in labeled_blocks:
                 if b["label"] in ("doc_title", "title"):
                     paddle_title = b["text"].replace("\n", " ").strip()
-                    # Remove markdown heading prefix if present
                     paddle_title = paddle_title.lstrip("# ").strip()
                     if paddle_title:
                         doc_metadata["title"] = paddle_title
-                        print(f"  📌 Using paddle title: {paddle_title}")
                     break
         except NameError:
-            pass  # labeled_blocks not available (resume mode)
+            pass
+
+    # CLI overrides take highest priority
+    if args.title:
+        doc_metadata["title"] = args.title
+    if args.author:
+        doc_metadata["author"] = args.author
+
+    print(f"  📌 Title: {doc_metadata['title']}")
+    print(f"  📌 Author: {doc_metadata['author']}")
 
     # Save scan results
     INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -584,6 +595,27 @@ Options:
         trim_overlaps, assemble_book, generate_toc,
         save_output, compare_lengths, insert_footnotes, qa_check_output,
     )
+
+    # Generate reader-facing intro (paddle only)
+    if use_paddle:
+        print("  📝 Generating reader introduction...")
+        from src.prompts import build_intro_prompt
+        try:
+            intro_sys, intro_usr = build_intro_prompt(
+                doc_summary=book_summary,
+                title=doc_metadata.get("title", ""),
+                author=doc_metadata.get("author", ""),
+            )
+            intro_text = llm.generate(
+                prompt=intro_usr,
+                system_prompt=intro_sys,
+                temperature=0.3,
+            )
+            if intro_text:
+                doc_metadata["intro"] = intro_text.strip()
+                print(f"  ✅ Intro: {intro_text.strip()[:100]}...")
+        except Exception as e:
+            print(f"  ⚠️  Intro generation failed: {str(e)[:100]}")
 
     # doc_metadata was built from the scan in Step 4 — no file reload needed
     if OVERLAP_TOKENS > 0:
