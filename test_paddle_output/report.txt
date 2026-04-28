@@ -1,143 +1,23 @@
-PaddleOCR LayoutDetection Analysis: john_rawls_socialist.pdf
+PaddleOCR LayoutDetection Analysis: sample-table-of-contents.pdf
 DPI: 150
 
 ============================================================
 PAGE 1
 ============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
-  Regions detected: 6
+  Page size: 612×792 pts
+  Image size: 1275×1650 px
+  Regions detected: 2
 
-  Region 0: doc_title (score=0.686)
-    Image coords: (149,49) → (844,120)
-    PDF coords: (71,24) → (405,58)
+  Region 0: paragraph_title (score=0.761)
+    Image coords: (545,221) → (801,250)
+    PDF coords: (262,106) → (384,120)
     Lines matched: 1
-    Text: "John Rawls, Socialist?..."
+    Text: "TABLE OF CONTENTS..."
 
-  Region 1: text (score=0.780)
-    Image coords: (148,244) → (335,317)
-    PDF coords: (71,117) → (161,152)
-    Lines matched: 2
-    Text: "BY ED QUISH..."
-
-  Region 2: text (score=0.533)
-    Image coords: (147,447) → (1052,594)
-    PDF coords: (71,214) → (505,285)
-    Lines matched: 3
-    Text: "John Rawls is remembered as one of the twentieth century’s preeminent liberal ph..."
-
-  Region 3: text (score=0.911)
-    Image coords: (146,778) → (1041,850)
-    PDF coords: (70,373) → (500,408)
-    Lines matched: 2
-    Text: "Review of John Rawls: Reticent Socialist (Cambridge University Press, 2017)..."
-
-  Region 4: text (score=0.946)
-    Image coords: (146,1069) → (1080,1361)
-    PDF coords: (70,513) → (518,653)
-    Lines matched: 7
-    Text: "John Rawls was one of the twentieth century’s preeminent liberal philosophers. H..."
-
-  Region 5: text (score=0.923)
-    Image coords: (146,1401) → (1073,1649)
-    PDF coords: (70,672) → (515,791)
-    Lines matched: 6
-    Text: "For critics on the Left, Rawls’s theory has often seemed insufficient for a crit..."
-
-  ✅ No orphaned lines
-
-============================================================
-PAGE 2
-============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
-  Regions detected: 6
-
-  Region 0: text (score=0.962)
-    Image coords: (146,43) → (1024,162)
-    PDF coords: (70,21) → (491,78)
-    Lines matched: 3
-    Text: "buttressing the existing order by making it seem like the inevitable product of ..."
-
-  Region 1: text (score=0.963)
-    Image coords: (147,201) → (1075,708)
-    PDF coords: (71,96) → (516,340)
-    Lines matched: 12
-    Text: "In John Rawls: Reticent Socialist, William A. Edmundson offers a left defense of..."
-
-  Region 2: text (score=0.979)
-    Image coords: (146,752) → (1081,1042)
-    PDF coords: (70,361) → (519,500)
-    Lines matched: 7
-    Text: "Edmundson is not so reticent, either in his support for socialism or praise for ..."
-
-  Region 3: text (score=0.963)
-    Image coords: (146,1084) → (1067,1246)
-    PDF coords: (70,520) → (512,598)
-    Lines matched: 4
-    Text: "Edmundson makes a powerful case for a “socialist constitutionalism” that deserve..."
-
-  Region 4: paragraph_title (score=0.905)
-    Image coords: (148,1379) → (579,1428)
-    PDF coords: (71,662) → (278,685)
-    Lines matched: 1
-    Text: "Justice as Fairness..."
-
-  Region 5: text (score=0.964)
-    Image coords: (147,1523) → (1075,1642)
-    PDF coords: (71,731) → (516,788)
-    Lines matched: 3
-    Text: "Rawls didn’t aspire to settle any immediate political debates in A Theory of Jus..."
-
-  ✅ No orphaned lines
-
-============================================================
-PAGE 3
-============================================================
-  Page size: 595×842 pts
-  Image size: 1240×1755 px
-  Regions detected: 7
-
-  Region 0: text (score=0.935)
-    Image coords: (146,43) → (1077,292)
-    PDF coords: (70,21) → (517,140)
-    Lines matched: 6
-    Text: "rational self-interest, moral theory could contribute to a public “sense of just..."
-
-  Region 1: text (score=0.931)
-    Image coords: (146,331) → (1067,669)
-    PDF coords: (70,159) → (512,321)
-    Lines matched: 8
-    Text: "Rawls explained his theory (which he called “justice as fairness”) by contrastin..."
-
-  Region 2: text (score=0.812)
-    Image coords: (148,708) → (1084,740)
-    PDF coords: (71,340) → (520,355)
-    Lines matched: 1
-    Text: "These concerns motivated the two principles of Rawls’s theory of justice:..."
-
-  Region 3: text (score=0.923)
-    Image coords: (234,839) → (965,956)
-    PDF coords: (112,403) → (463,459)
-    Lines matched: 3
-    Text: "1) Each person is to have an equal right to the most extensive total system of e..."
-
-  Region 4: text (score=0.915)
-    Image coords: (233,997) → (992,1160)
-    PDF coords: (112,478) → (476,557)
-    Lines matched: 4
-    Text: "2) Social and economic inequalities are to be arranged so that they are both (a)..."
-
-  Region 5: text (score=0.954)
-    Image coords: (146,1242) → (1062,1536)
-    PDF coords: (70,596) → (510,737)
-    Lines matched: 7
-    Text: "The basic liberties protected by the first principle included the right to vote ..."
-
-  Region 6: text (score=0.918)
-    Image coords: (147,1576) → (1057,1651)
-    PDF coords: (71,756) → (507,792)
-    Lines matched: 2
-    Text: "Because Rawls wanted to guide rather than settle contentious debates, his theory..."
+  Region 1: content (score=0.984)
+    Image coords: (221,274) → (1088,962)
+    PDF coords: (106,132) → (522,462)
+    Lines matched: 20
+    Text: "Abstract .........................................................................."
 
   ✅ No orphaned lines
