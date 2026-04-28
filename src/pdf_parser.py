@@ -851,6 +851,65 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
                 if matching_lines:
                     region_font_size = sum(s["font_size"] for s in matching_lines) / len(matching_lines)
 
+            # ── Special handling: images ──────────────────────────────
+            if label in ("image", "figure") and not text:
+                # Extract the actual image region from the PDF page
+                try:
+                    clip_rect = pymupdf.Rect(region_x0, region_y0, region_x1, region_y1)
+                    # Render just this region at higher DPI
+                    pix = page.get_pixmap(clip=clip_rect, dpi=200)
+                    # Save to output/images/
+                    images_dir = Path(pdf_path).parent.parent / "output" / "images"
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    img_count = region_counts.get("_img_saved", 0) + 1
+                    region_counts["_img_saved"] = img_count
+                    img_filename = f"fig_p{page_idx + 1}_{img_count}.png"
+                    img_path = images_dir / img_filename
+                    pix.save(str(img_path))
+                    text = f"![Figure on page {page_idx + 1}](images/{img_filename})"
+                except Exception:
+                    text = f"[Figure on page {page_idx + 1}]"
+
+            # ── Special handling: tables ──────────────────────────────
+            if label == "table":
+                # Try to extract structured table using PyMuPDF
+                try:
+                    table_rect = pymupdf.Rect(region_x0, region_y0, region_x1, region_y1)
+                    tables = page.find_tables(clip=table_rect)
+                    if tables.tables:
+                        tbl = tables[0]
+                        rows = tbl.extract()
+                        if rows and any(any(cell for cell in row) for row in rows):
+                            # Clean cells: strip whitespace, normalize
+                            cleaned_rows = []
+                            for row in rows:
+                                cleaned_rows.append([
+                                    str(c).replace("\n", " ").strip() if c else ""
+                                    for c in row
+                                ])
+
+                            # Strip columns that are entirely empty
+                            if cleaned_rows:
+                                num_cols = len(cleaned_rows[0])
+                                keep_cols = []
+                                for ci in range(num_cols):
+                                    if any(cleaned_rows[ri][ci] for ri in range(len(cleaned_rows))):
+                                        keep_cols.append(ci)
+                                cleaned_rows = [
+                                    [row[ci] for ci in keep_cols]
+                                    for row in cleaned_rows
+                                ]
+
+                            # Build markdown table
+                            md_rows = []
+                            for ri, row in enumerate(cleaned_rows):
+                                md_rows.append("| " + " | ".join(row) + " |")
+                                if ri == 0:
+                                    md_rows.append("| " + " | ".join("---" for _ in row) + " |")
+                            text = "\n".join(md_rows)
+                except Exception:
+                    pass  # Fall back to whatever text was already extracted
+
             if not text:
                 continue
 
