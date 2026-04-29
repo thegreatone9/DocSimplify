@@ -202,16 +202,6 @@ Options:
     output_name = input_path.stem + "_simplified.md"
     output_path = OUTPUT_DIR / output_name
 
-    # ── Default: start fresh. Only keep intermediate files if --resume is passed ──
-    if not args.resume:
-        # Clear ALL intermediate and output files to ensure clean state
-        import glob
-        for stale_file in glob.glob(str(INTERMEDIATE_DIR / "*")):
-            Path(stale_file).unlink()
-        if output_path.exists():
-            output_path.unlink()
-        print("  🆕 Starting fresh (use --resume to continue a previous run)")
-
     extraction_mode = "PaddleOCR (neural)" if use_paddle else ("surya (neural)" if use_surya else "heuristic (font/position)")
     llm_mode = "Gemini API" if use_gemini else ("Groq API" if use_groq else f"Ollama ({model})")
     print(f"""
@@ -500,8 +490,44 @@ Options:
         with open(scan_path) as f:
             doc_scan = json.load(f)
     else:
-        _step("4/10", "Document Structure Scan (raw pages)")
-        if ext == ".pdf":
+        _step("4/10", "Document Structure Scan")
+        if ext == ".pdf" and use_paddle:
+            # Paddle path: derive structure from paddle labels + boundary detection
+            # instead of re-opening the PDF and making 3-12 LLM calls
+            try:
+                _title = doc_boundary_title
+            except NameError:
+                _title = None
+            try:
+                _author = doc_boundary_author
+            except NameError:
+                _author = None
+
+            doc_scan = {
+                "title": _title,
+                "subtitle": None,
+                "authors": [_author] if _author else [],
+                "has_toc": any(b.get("label") == "content" for b in labeled_blocks),
+                "has_abstract": False,
+                "has_references": any(b.get("label") == "reference" for b in labeled_blocks),
+                "has_endnotes": False,
+                "sections": [
+                    b["text"].split("\n")[0].strip()[:80]
+                    for b in labeled_blocks
+                    if b.get("label") == "paragraph_title" and b.get("text", "").strip()
+                ],
+                "total_pages": paddle_structure.get("total_pages", 0),
+                "body_starts_at_page": labeled_blocks[0]["page"] if labeled_blocks else 1,
+                "back_matter_starts_at_page": None,
+            }
+            print(f"     Title:      {doc_scan['title']}")
+            if doc_scan['authors']:
+                print(f"     Author(s):  {', '.join(doc_scan['authors'])}")
+            print(f"     Sections:   {len(doc_scan['sections'])} headings from paddle labels")
+            print(f"     TOC: {'Yes' if doc_scan['has_toc'] else 'No'}")
+            print(f"     References: {'Yes' if doc_scan['has_references'] else 'No'}")
+
+        elif ext == ".pdf":
             from src.doc_classifier import scan_document_structure, print_scan_summary
             # Build extracted text for section heading detection
             # Use markdown if available (fresh run), else reconstruct from chapters
