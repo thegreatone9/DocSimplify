@@ -15,6 +15,12 @@ Checks for:
   5. DRM-protected EPUBs (extraction returns nothing)
   6. Extremely short documents (not worth the pipeline overhead)
   7. Table-heavy / data-heavy documents (spreadsheet-like)
+  8. Low prose density (infographics, slide decks, forms, certificates)
+  9. Encrypted / password-protected PDFs
+ 10. Extremely large PDFs (>500 pages)
+ 11. Source code / programming documents
+ 12. Duplicate-page PDFs (print spooler errors)
+ 13. Corrupted / malformed PDFs
 """
 
 import re
@@ -82,6 +88,15 @@ MIN_VIABLE_CHARS = 5_000
 # If more than this % of lines look like table rows, it's table-heavy
 TABLE_HEAVY_THRESHOLD_PCT = 25
 
+# Maximum allowed page count
+MAX_PAGE_COUNT = 500
+
+# If more than this % of lines look like code, it's a code document
+CODE_HEAVY_THRESHOLD_PCT = 30
+
+# If more than this % of pages are duplicates of another page, it's a spooler error
+DUPLICATE_PAGE_THRESHOLD_PCT = 40
+
 
 # ── LaTeX / math patterns ───────────────────────────────────────────────────
 
@@ -135,7 +150,18 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             failures=[f"File not found: {pdf_path}"],
         )
 
-    doc = pymupdf.open(str(pdf_path))
+    # ── Check 0: Corrupted / unreadable PDF ──
+    try:
+        doc = pymupdf.open(str(pdf_path))
+    except Exception as e:
+        return SanityResult(
+            passed=False,
+            failures=[
+                f"CORRUPTED or MALFORMED PDF. Cannot open file: {str(e)[:150]}. "
+                "The file may be damaged, truncated, or not a valid PDF."
+            ],
+        )
+
     page_count = len(doc)
 
     if page_count == 0:
@@ -145,17 +171,49 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             failures=["PDF has 0 pages."],
         )
 
+    # ── Check 1: Encrypted / password-protected ──
+    if doc.is_encrypted:
+        doc.close()
+        return SanityResult(
+            passed=False,
+            failures=[
+                "ENCRYPTED / PASSWORD-PROTECTED PDF. The document requires a password "
+                "to read its content. Remove the password protection first (e.g., using "
+                "qpdf or an online tool) before processing."
+            ],
+            stats={"pages": page_count},
+        )
+
+    # ── Check 2: Too many pages ──
+    if page_count > MAX_PAGE_COUNT:
+        doc.close()
+        return SanityResult(
+            passed=False,
+            failures=[
+                f"DOCUMENT TOO LARGE. {page_count:,} pages exceeds the maximum of "
+                f"{MAX_PAGE_COUNT:,}. Processing would take too long and consume "
+                "excessive API credits. Split the document into smaller parts first."
+            ],
+            stats={"pages": page_count},
+        )
+
     # ── Extract text and image stats per page ──
     page_chars = []
     page_image_counts = []
     full_text_parts = []
 
     for page in doc:
-        text = page.get_text("text")
+        try:
+            text = page.get_text("text")
+        except Exception:
+            text = ""
         page_chars.append(len(text))
         full_text_parts.append(text)
 
-        images = page.get_images(full=False)
+        try:
+            images = page.get_images(full=False)
+        except Exception:
+            images = []
         page_image_counts.append(len(images))
 
     doc.close()
@@ -172,7 +230,7 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
         "avg_chars_per_page": round(avg_chars_per_page),
     }
 
-    # ── Check 1: Scanned / image-only PDF ──
+    # ── Check 3: Scanned / image-only PDF ──
     if avg_chars_per_page < SCANNED_PDF_CHARS_PER_PAGE:
         result.passed = False
         result.failures.append(
@@ -182,7 +240,7 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             "which our pipeline doesn't support yet."
         )
 
-    # ── Check 2: Image-heavy ──
+    # ── Check 4: Image-heavy ──
     pages_mostly_images = sum(
         1 for chars, imgs in zip(page_chars, page_image_counts)
         if imgs > 0 and chars < 100
@@ -198,13 +256,13 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             f"The simplified output would be missing most of the book's content."
         )
 
-    # ── Check 3: Math-heavy ──
+    # ── Check 5: Math-heavy ──
     _check_math_heavy(full_text, result)
 
-    # ── Check 4: Non-English ──
+    # ── Check 6: Non-English ──
     _check_non_english(full_text, result)
 
-    # ── Check 5: Minimum viable content ──
+    # ── Check 7: Minimum viable content ──
     if total_chars < MIN_VIABLE_CHARS:
         result.passed = False
         result.failures.append(
@@ -213,11 +271,17 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             "or corrupted."
         )
 
-    # ── Check 6: Table-heavy ──
+    # ── Check 8: Table-heavy ──
     _check_table_heavy(full_text, result)
 
-    # ── Check 7: Low prose density (infographics, timelines, posters) ──
+    # ── Check 9: Low prose density (infographics, timelines, posters) ──
     _check_prose_density(full_text, page_count, result)
+
+    # ── Check 10: Source code / programming document ──
+    _check_source_code(full_text, result)
+
+    # ── Check 11: Duplicate pages (print spooler errors) ──
+    _check_duplicate_pages(full_text_parts, result)
 
     return result
 
@@ -470,6 +534,103 @@ def _check_prose_density(text: str, page_count: int, result: SanityResult) -> No
             f"Moderate prose density ({prose_pct:.0f}%). The document has significant "
             "non-prose content (labels, captions, structured elements). Some sections "
             "may not simplify well."
+        )
+
+
+def _check_source_code(text: str, result: SanityResult) -> None:
+    """
+    Detect documents that are primarily source code or programming content.
+
+    Looks for code-specific patterns: braces, semicolons, import statements,
+    function/class definitions, common language keywords.
+    """
+    if not text:
+        return
+
+    lines = text.split("\n")
+    non_empty_lines = [l for l in lines if l.strip()]
+
+    if len(non_empty_lines) < 20:
+        return  # Too few lines to judge
+
+    # Code indicators per line
+    code_patterns = re.compile(
+        r"^\s*(?:"
+        r"import\s+\w|from\s+\w+\s+import|"       # Python imports
+        r"#include\s*<|#define\s+|"                 # C/C++ preprocessor
+        r"(?:public|private|protected)\s+(?:class|void|static|int|String)|"  # Java/C#
+        r"(?:def|class|function|const|let|var)\s+\w+|"  # Python/JS definitions
+        r"(?:if|else|for|while|switch|case|return)\s*[\({]|"  # Control flow with braces
+        r"\}\s*(?:else|catch|finally)?|"            # Closing braces
+        r";\s*$|"                                    # Semicolon-terminated lines
+        r"^\s*//|^\s*/\*|^\s*\*"                    # Comments (// or /* or *)
+        r")",
+        re.MULTILINE
+    )
+
+    code_lines = sum(1 for l in non_empty_lines if code_patterns.match(l))
+    code_pct = (code_lines / len(non_empty_lines) * 100)
+    result.stats["code_line_pct"] = round(code_pct, 1)
+
+    if code_pct > CODE_HEAVY_THRESHOLD_PCT:
+        result.passed = False
+        result.failures.append(
+            f"SOURCE CODE document detected. {code_pct:.0f}% of lines appear to be "
+            "programming code (imports, function definitions, braces, semicolons). "
+            "Our pipeline is designed for prose text, not code. Source code cannot be "
+            "meaningfully 'simplified' — use a code documentation tool instead."
+        )
+    elif code_pct > 15:
+        result.warnings.append(
+            f"Some code-like content detected ({code_pct:.0f}% of lines). "
+            "Code blocks may not be preserved well in the simplified output."
+        )
+
+
+def _check_duplicate_pages(page_texts: list[str], result: SanityResult) -> None:
+    """
+    Detect PDFs with many duplicate pages — typically caused by print spooler
+    errors or copy-paste accidents. These waste API credits processing the
+    same content repeatedly.
+    """
+    if len(page_texts) < 3:
+        return  # Too few pages to have meaningful duplicates
+
+    import hashlib
+
+    # Hash each page's text (stripped and lowered for normalization)
+    page_hashes = []
+    for text in page_texts:
+        normalized = text.strip().lower()
+        if len(normalized) < 50:
+            # Very short pages (blank/near-blank) — don't count as duplicates
+            page_hashes.append(None)
+        else:
+            page_hashes.append(hashlib.md5(normalized.encode()).hexdigest())
+
+    # Count unique vs total (excluding blank pages)
+    valid_hashes = [h for h in page_hashes if h is not None]
+    if not valid_hashes:
+        return
+
+    unique_hashes = set(valid_hashes)
+    duplicate_count = len(valid_hashes) - len(unique_hashes)
+    duplicate_pct = (duplicate_count / len(valid_hashes) * 100)
+
+    result.stats["duplicate_page_pct"] = round(duplicate_pct, 1)
+
+    if duplicate_pct > DUPLICATE_PAGE_THRESHOLD_PCT:
+        result.passed = False
+        result.failures.append(
+            f"DUPLICATE PAGE document. {duplicate_pct:.0f}% of pages ({duplicate_count} of "
+            f"{len(valid_hashes)}) are exact duplicates of other pages. This is likely a "
+            "print spooler error or copy-paste accident. Processing would waste API credits "
+            "on repeated content. Remove duplicate pages first."
+        )
+    elif duplicate_pct > 15:
+        result.warnings.append(
+            f"Some duplicate pages detected ({duplicate_pct:.0f}%). "
+            "The document may have repeated content or boilerplate pages."
         )
 
 
