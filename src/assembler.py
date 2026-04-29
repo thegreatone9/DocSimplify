@@ -225,23 +225,36 @@ def generate_toc(markdown_text: str, force: bool = False) -> str:
     """
     Auto-generate a Markdown Table of Contents from heading structure.
 
-    Only generates a TOC if force=True — meaning the original document
-    had a TOC. Never auto-generates one.
+    Only generates a TOC if:
+      - force=True, AND
+      - The document has more than 5 section headings, AND
+      - The document is longer than ~3 pages (~1500 words)
 
     Args:
         markdown_text: The assembled Markdown book.
-        force:         If True, generate a TOC. If False, return empty string.
+        force:         If True, allow TOC generation (still gated by length/heading checks).
 
     Returns:
-        A Markdown TOC string, or empty string if force is False.
+        A Markdown TOC string, or empty string if conditions aren't met.
     """
     if not force:
         return ""
 
+    # Check document length (~500 words per page, need >3 pages)
+    word_count = len(markdown_text.split())
+    if word_count < 1500:
+        return ""
+
     heading_pattern = re.compile(r"^(#{2,3})\s+(.+)$", re.MULTILINE)
+    matches = list(heading_pattern.finditer(markdown_text))
+
+    # Need more than 5 section headings to justify a TOC
+    if len(matches) <= 5:
+        return ""
+
     toc_lines = ["## Table of Contents\n"]
 
-    for match in heading_pattern.finditer(markdown_text):
+    for match in matches:
         level = len(match.group(1))
         title = match.group(2).strip()
 
@@ -251,9 +264,6 @@ def generate_toc(markdown_text: str, force: bool = False) -> str:
 
         indent = "  " * (level - 2)
         toc_lines.append(f"{indent}- [{title}](#{anchor})")
-
-    if len(toc_lines) <= 1:
-        return ""
 
     return "\n".join(toc_lines) + "\n"
 

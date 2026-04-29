@@ -959,7 +959,7 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
         "equation": "VERBATIM",
         "formula": "VERBATIM",
         "abstract": "BODY",
-        "content": "VERBATIM",         # table of contents entries
+        "content": "FRONT_MATTER",     # TOC — discarded (regenerated from output headings)
         "seal": "VERBATIM",
         "number": "STRIP",         # page numbers — discard
         "header": "STRIP",         # page headers — discard

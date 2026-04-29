@@ -786,7 +786,13 @@ def _simplify_one_chunk_paragraphs(
                     break  # Acceptable
 
                 if is_retry:
-                    print(f"\n     ⚠️  ¶{i} retry {attempt-1}: ratio={ratio:.2f} (need ≥{min_ratio})")
+                    if ratio < min_ratio:
+                        reason = "too short"
+                    elif ratio > max_ratio:
+                        reason = "too long"
+                    else:
+                        reason = "out of range"
+                    print(f"\n     ⚠️  ¶{i} retry {attempt-1}: ratio={ratio:.2f} ({reason}, need {min_ratio}–{max_ratio})")
 
             except Exception as e:
                 print(f"\n     ⚠️  ¶{i} failed: {str(e)[:120]}")

@@ -352,9 +352,11 @@ Options:
                         if 0 < body_start_idx < len(labeled_blocks):
                             absorbed = 0
                             for j in range(body_start_idx):
-                                if labeled_blocks[j]["section_type"] in ("BODY", "FRONT_MATTER"):
-                                    labeled_blocks[j]["section_type"] = "FRONT_MATTER"
-                                    absorbed += 1
+                                # Keep TOC blocks (content label) as VERBATIM
+                                if labeled_blocks[j]["label"] == "content":
+                                    continue
+                                labeled_blocks[j]["section_type"] = "FRONT_MATTER"
+                                absorbed += 1
                             print(f"  ✅ LLM: body starts at block {body_start_idx} "
                                   f"(page {labeled_blocks[body_start_idx]['page']})")
                             print(f"     Absorbed {absorbed} frontmatter block(s)")
@@ -733,8 +735,8 @@ Options:
             book_md = book_md.rstrip() + concept_map_md
 
     # TOC — use the scan-derived signal only (no stale metadata)
-    had_toc = doc_scan.get("has_toc", False)
-    toc = generate_toc(book_md, force=had_toc)
+    # Always generate TOC from output headings (original TOC page numbers are stale)
+    toc = generate_toc(book_md, force=True)
     if toc:
         divider_pos = book_md.find("---")
         if divider_pos > 0:
