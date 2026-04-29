@@ -1,23 +1,305 @@
-PaddleOCR LayoutDetection Analysis: sample-table-of-contents.pdf
+PaddleOCR LayoutDetection Analysis: c-21st-century.pdf
 DPI: 150
 
 ============================================================
 PAGE 1
 ============================================================
-  Page size: 612×792 pts
-  Image size: 1275×1650 px
+  Page size: 459×680 pts
+  Image size: 957×1418 px
+  Regions detected: 16
+
+  Region 0: paragraph_title (score=0.557)
+    Image coords: (318,216) → (626,241)
+    PDF coords: (153,104) → (300,116)
+    Lines matched: 1
+    Text: "Capitalism in the 21st Century..."
+
+  Region 1: doc_title (score=0.531)
+    Image coords: (318,216) → (626,241)
+    PDF coords: (153,104) → (300,116)
+    Lines matched: 1
+    Text: "Capitalism in the 21st Century..."
+
+  Region 2: text (score=0.957)
+    Image coords: (131,348) → (765,414)
+    PDF coords: (63,167) → (367,199)
+    Lines matched: 3
+    Text: "‘A tour-de-force of Marxist analysis; both a significant addition to the literat..."
+
+  Region 3: text (score=0.880)
+    Image coords: (293,418) → (791,438)
+    PDF coords: (141,201) → (380,210)
+    Lines matched: 1
+    Text: "—Murray E.G. Smith, Professor of Sociology, Brock University..."
+
+  Region 4: text (score=0.970)
+    Image coords: (130,463) → (764,552)
+    PDF coords: (62,222) → (367,265)
+    Lines matched: 4
+    Text: "‘Carchedi and Roberts make killer arguments that Marx’s labour theory of value i..."
+
+  Region 5: text (score=0.932)
+    Image coords: (370,556) → (791,598)
+    PDF coords: (178,267) → (380,287)
+    Lines matched: 2
+    Text: "—Rick Kuhn, author of the Deutscher Prize-winning Henryk Grossman and the Recove..."
+
+  Region 6: text (score=0.976)
+    Image coords: (130,624) → (783,711)
+    PDF coords: (62,299) → (376,341)
+    Lines matched: 4
+    Text: "‘Fundamental: it explains the characteristics of the current world through its m..."
+
+  Region 7: text (score=0.916)
+    Image coords: (213,716) → (790,736)
+    PDF coords: (102,344) → (379,353)
+    Lines matched: 1
+    Text: "—Raquel Varela, author of A People’s History of the Portuguese Revolution..."
+
+  Region 8: text (score=0.966)
+    Image coords: (131,762) → (784,827)
+    PDF coords: (63,366) → (376,397)
+    Lines matched: 3
+    Text: "‘This book offers a rigorous Marxist interpretation of some of the major issues ..."
+
+  Region 9: text (score=0.908)
+    Image coords: (356,831) → (791,873)
+    PDF coords: (171,399) → (380,419)
+    Lines matched: 2
+    Text: "—Stavros Mavroudeas, Professor of Political Economy, Panteion University, Greece..."
+
+  Region 10: text (score=0.968)
+    Image coords: (131,899) → (768,988)
+    PDF coords: (63,431) → (369,474)
+    Lines matched: 4
+    Text: "‘Capitalism will always be capitalism, but in the 21st century new forms, contro..."
+
+  Region 11: text (score=0.930)
+    Image coords: (419,990) → (791,1034)
+    PDF coords: (201,475) → (380,496)
+    Lines matched: 2
+    Text: "—Juan Pablo, Professor of Applied Economics, Complutense University of Madrid..."
+
+  Region 12: text (score=0.958)
+    Image coords: (131,1059) → (786,1100)
+    PDF coords: (63,508) → (377,528)
+    Lines matched: 2
+    Text: "‘[Carchedi and Roberts are] two of the most accomplished and prominent Marxist a..."
+
+  Region 13: text (score=0.923)
+    Image coords: (365,1105) → (790,1148)
+    PDF coords: (175,530) → (379,551)
+    Lines matched: 2
+    Text: "—Lefteris Tsoulfidis, Professor of Economic Thought, University of Macedonia, Gr..."
+
+  Region 14: text (score=0.936)
+    Image coords: (131,1173) → (750,1216)
+    PDF coords: (63,563) → (360,583)
+    Lines matched: 2
+    Text: "‘Brilliant Marxian theoretical and empirical analysis […] as if updating Ernest ..."
+
+  Region 15: text (score=0.889)
+    Image coords: (191,1220) → (791,1241)
+    PDF coords: (92,585) → (380,595)
+    Lines matched: 1
+    Text: "—Seongjin Jeong, Professor of Economics, Gyeongsang National University..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 2
+============================================================
+  Page size: 459×680 pts
+  Image size: 957×1418 px
+  Regions detected: 13
+
+  Region 0: doc_title (score=0.917)
+    Image coords: (213,136) → (759,189)
+    PDF coords: (102,65) → (364,91)
+    Lines matched: 2
+    Text: "Published in association with the International Initiative for Promoting Politic..."
+
+  Region 1: image (score=0.971)
+    Image coords: (425,208) → (551,336)
+    PDF coords: (204,100) → (264,161)
+    Lines matched: 0
+    Text: "..."
+
+  Region 2: text (score=0.855)
+    Image coords: (318,358) → (655,432)
+    PDF coords: (153,172) → (314,207)
+    Lines matched: 3
+    Text: "Edited by Ben Fine (SOAS, University of London) Dimitris Milonakis (University o..."
+
+  Region 3: text (score=0.986)
+    Image coords: (155,463) → (815,650)
+    PDF coords: (74,222) → (391,312)
+    Lines matched: 8
+    Text: "Political economy and the theory of economic and social development have long be..."
+
+  Region 4: text (score=0.981)
+    Image coords: (156,654) → (815,769)
+    PDF coords: (75,314) → (391,369)
+    Lines matched: 5
+    Text: "With world financial crises no longer a distant memory, and neoliberal scholarsh..."
+
+  Region 5: text (score=0.982)
+    Image coords: (156,774) → (815,891)
+    PDF coords: (75,371) → (391,427)
+    Lines matched: 5
+    Text: "The objective of this series is to support the revival and renewal of political ..."
+
+  Region 6: paragraph_title (score=0.600)
+    Image coords: (158,920) → (272,938)
+    PDF coords: (76,441) → (131,450)
+    Lines matched: 1
+    Text: "Also available..."
+
+  Region 7: text (score=0.516)
+    Image coords: (158,920) → (272,938)
+    PDF coords: (76,441) → (131,450)
+    Lines matched: 1
+    Text: "Also available..."
+
+  Region 8: text (score=0.862)
+    Image coords: (494,966) → (668,1030)
+    PDF coords: (237,463) → (321,494)
+    Lines matched: 3
+    Text: "Money and Society: A Critical Companion Axel T. Paul..."
+
+  Region 9: text (score=0.940)
+    Image coords: (156,966) → (453,1076)
+    PDF coords: (75,463) → (217,516)
+    Lines matched: 5
+    Text: "Beyond the Developmental State: Industrial Policy into the Twenty-First Century..."
+
+  Region 10: text (score=0.953)
+    Image coords: (494,1058) → (771,1146)
+    PDF coords: (237,508) → (370,550)
+    Lines matched: 4
+    Text: "Dot.compradors: Crisis and Corruption in the Indian Software Industry..."
+
+  Region 11: text (score=0.952)
+    Image coords: (156,1104) → (332,1166)
+    PDF coords: (75,530) → (159,559)
+    Lines matched: 3
+    Text: "Microeconomics: A Critical Companion Ben Fine..."
+
+  Region 12: text (score=0.953)
+    Image coords: (156,1196) → (415,1259)
+    PDF coords: (75,574) → (199,604)
+    Lines matched: 3
+    Text: "Macroeconomics: A Critical Companion Ben Fine and Ourania Dimakou..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 3
+============================================================
+  Page size: 459×680 pts
+  Image size: 957×1418 px
+  Regions detected: 4
+
+  Region 0: doc_title (score=0.522)
+    Image coords: (220,233) → (704,386)
+    PDF coords: (106,112) → (338,185)
+    Lines matched: 2
+    Text: "Capitalism in the 21st Century..."
+
+  Region 1: doc_title (score=0.741)
+    Image coords: (221,234) → (702,453)
+    PDF coords: (106,112) → (337,217)
+    Lines matched: 3
+    Text: "Capitalism in the 21st Century Through the Prism of Value..."
+
+  Region 2: text (score=0.868)
+    Image coords: (251,558) → (670,583)
+    PDF coords: (120,268) → (321,280)
+    Lines matched: 1
+    Text: "Guglielmo Carchedi and Michael Roberts..."
+
+  Region 3: footer (score=0.531)
+    Image coords: (326,1202) → (585,1259)
+    PDF coords: (156,577) → (281,604)
+    Lines matched: 0
+    Text: "..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 4
+============================================================
+  Page size: 459×680 pts
+  Image size: 957×1418 px
+  Regions detected: 8
+
+  Region 0: text (score=0.944)
+    Image coords: (157,138) → (605,227)
+    PDF coords: (75,66) → (290,109)
+    Lines matched: 4
+    Text: "First published 2023 by Pluto Press New Wing, Somerset House, Strand, London WC2..."
+
+  Region 1: text (score=0.561)
+    Image coords: (157,252) → (323,270)
+    PDF coords: (75,121) → (155,130)
+    Lines matched: 1
+    Text: "www.plutobooks.com..."
+
+  Region 2: paragraph_title (score=0.509)
+    Image coords: (157,252) → (323,270)
+    PDF coords: (75,121) → (155,130)
+    Lines matched: 1
+    Text: "www.plutobooks.com..."
+
+  Region 3: text (score=0.841)
+    Image coords: (157,298) → (610,317)
+    PDF coords: (75,143) → (293,152)
+    Lines matched: 1
+    Text: "Copyright © Guglielmo Carchedi and Michael Roberts 2023..."
+
+  Region 4: text (score=0.970)
+    Image coords: (157,343) → (810,407)
+    PDF coords: (75,165) → (389,195)
+    Lines matched: 3
+    Text: "The right of Guglielmo Carchedi and Michael Roberts to be identified as the auth..."
+
+  Region 5: text (score=0.929)
+    Image coords: (157,436) → (671,478)
+    PDF coords: (75,209) → (322,229)
+    Lines matched: 2
+    Text: "British Library Cataloguing in Publication Data A catalogue record for this book..."
+
+  Region 6: text (score=0.933)
+    Image coords: (157,504) → (434,567)
+    PDF coords: (75,242) → (208,272)
+    Lines matched: 3
+    Text: "ISBN  978 0 7453 4088 3	 Paperback ISBN  978 1 786806 96 3 	PDF ISBN  978 1 7868..."
+
+  Region 7: text (score=0.872)
+    Image coords: (157,1126) → (600,1147)
+    PDF coords: (75,540) → (288,550)
+    Lines matched: 1
+    Text: "Typeset by Stanford DTP Services, Northampton, England..."
+
+  ✅ No orphaned lines
+
+============================================================
+PAGE 5
+============================================================
+  Page size: 459×680 pts
+  Image size: 957×1418 px
   Regions detected: 2
 
-  Region 0: paragraph_title (score=0.761)
-    Image coords: (545,221) → (801,250)
-    PDF coords: (262,106) → (384,120)
+  Region 0: paragraph_title (score=0.798)
+    Image coords: (390,134) → (534,175)
+    PDF coords: (187,64) → (256,84)
     Lines matched: 1
-    Text: "TABLE OF CONTENTS..."
+    Text: "Contents..."
 
   Region 1: content (score=0.984)
-    Image coords: (221,274) → (1088,962)
-    PDF coords: (106,132) → (522,462)
-    Lines matched: 20
-    Text: "Abstract .........................................................................."
+    Image coords: (132,281) → (793,1256)
+    PDF coords: (63,135) → (381,603)
+    Lines matched: 62
+    Text: "List of Figures vii List of Tables..."
 
   ✅ No orphaned lines

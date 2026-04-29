@@ -8,6 +8,64 @@ and book summary generation. Centralized so they're easy to iterate on.
 import json
 
 
+def build_body_boundary_prompt(blocks_preview: list[dict]) -> tuple[str, str]:
+    """
+    Build a prompt to detect where the main body text starts.
+
+    Given a list of labeled blocks from the document's first pages,
+    asks the LLM to identify which block index begins the actual
+    authored prose (not frontmatter like endorsements, copyright, TOC, etc).
+
+    Args:
+        blocks_preview: List of dicts with keys: index, label, page, preview.
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    system_prompt = """You identify where the main body text begins in a document.
+
+You will receive a numbered list of text blocks from the start of a document, 
+with their page numbers and content previews. Your job is to find the FIRST block 
+that contains actual authored prose — the main content the author wrote.
+
+NOT body text (skip ALL of these):
+- Endorsement quotes, blurbs, or reviews from other people
+- Publisher information, series descriptions, editorial board info
+- Descriptions of other books in the same series ("Also available...")
+- Title pages, author names, subtitle lines
+- Copyright notices, ISBN numbers, legal text
+- Table of contents, list of figures/tables
+- Dedications, acknowledgments, forewords by others
+- Any text ABOUT the book/document rather than BY the author
+
+IS body text (look for these — usually starts with a section heading):
+- "Introduction", "Chapter 1", or the first numbered section
+- The first paragraph where the author presents THEIR OWN ideas/argument
+- Typically signaled by a paragraph_title block like "## Introduction"
+
+IMPORTANT: Look for a paragraph_title block (section heading) that marks the 
+start of authored content. The body almost always starts with a heading, not 
+with a plain text block.
+
+Reply with ONLY a JSON object: {"body_starts_at": <block_index>, "title": "<document title>", "author": "<author name(s)>"}
+The title is the MAIN title of the document — not a series name or publisher name.
+The author is the person who WROTE the document — NOT editors, series editors, or endorsers.
+Nothing else."""
+
+    blocks_text = "\n".join(
+        f"Block {b['index']} (page {b['page']}, {b['label']}): {b['preview']}"
+        for b in blocks_preview
+    )
+
+    user_prompt = f"""Identify the body start, title, and author of this document.
+
+{blocks_text}
+
+Reply with ONLY: {{"body_starts_at": <index>, "title": "<title>", "author": "<name(s)>"}}"""
+
+    return system_prompt, user_prompt
+
+
 def build_simplification_prompt(
     chunk_text: str,
     book_summary: str,

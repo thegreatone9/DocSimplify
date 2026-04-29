@@ -299,6 +299,88 @@ Options:
             print("  🧠 Running PaddleOCR layout detection...")
             markdown, paddle_structure, labeled_blocks = extract_pdf_with_paddle(input_path)
 
+            # ── LLM body boundary detection (batched, ~1000 tokens/batch) ──
+            # Sends block previews in expanding batches until body start
+            # is found. Falls back to heuristic if all batches exhausted.
+            print("  🔎 Detecting body text boundary...")
+            doc_boundary_author = None
+            doc_boundary_title = None
+            try:
+                from src.prompts import build_body_boundary_prompt
+                import re as _re
+
+                CHAR_BUDGET = 4000  # ~1000 tokens at ~4 chars/token
+                body_found = False
+                batch_start = 0
+                batch_num = 0
+
+                while batch_start < len(labeled_blocks) and not body_found:
+                    blocks_preview = []
+                    chars_used = 0
+                    batch_end = batch_start
+
+                    for i in range(batch_start, len(labeled_blocks)):
+                        line = (f"Block {i} (page {labeled_blocks[i]['page']}, "
+                                f"{labeled_blocks[i]['label']}): "
+                                f"{labeled_blocks[i]['text'][:80]}")
+                        if chars_used + len(line) > CHAR_BUDGET and blocks_preview:
+                            break
+                        blocks_preview.append({
+                            "index": i,
+                            "page": labeled_blocks[i]["page"],
+                            "label": labeled_blocks[i]["label"],
+                            "preview": labeled_blocks[i]["text"][:80].replace("\n", " "),
+                        })
+                        chars_used += len(line)
+                        batch_end = i
+
+                    if not blocks_preview:
+                        break
+
+                    batch_num += 1
+                    print(f"     Batch {batch_num}: blocks {batch_start}-{batch_end} "
+                          f"(pages {blocks_preview[0]['page']}-{blocks_preview[-1]['page']})")
+
+                    bnd_sys, bnd_usr = build_body_boundary_prompt(blocks_preview)
+                    bnd_response = llm.generate(
+                        prompt=bnd_usr, system_prompt=bnd_sys, temperature=0.0,
+                    )
+
+                    match = _re.search(r'"body_starts_at"\s*:\s*(\d+)', bnd_response)
+                    if match:
+                        body_start_idx = int(match.group(1))
+                        if 0 < body_start_idx < len(labeled_blocks):
+                            absorbed = 0
+                            for j in range(body_start_idx):
+                                if labeled_blocks[j]["section_type"] in ("BODY", "FRONT_MATTER"):
+                                    labeled_blocks[j]["section_type"] = "FRONT_MATTER"
+                                    absorbed += 1
+                            print(f"  ✅ LLM: body starts at block {body_start_idx} "
+                                  f"(page {labeled_blocks[body_start_idx]['page']})")
+                            print(f"     Absorbed {absorbed} frontmatter block(s)")
+                            body_found = True
+
+                        author_match = _re.search(r'"author"\s*:\s*"([^"]+)"', bnd_response)
+                        if author_match:
+                            _llm_author = author_match.group(1).strip()
+                            if _llm_author:
+                                doc_boundary_author = _llm_author
+                                print(f"  📝 LLM detected author: {doc_boundary_author}")
+
+                        title_match = _re.search(r'"title"\s*:\s*"([^"]+)"', bnd_response)
+                        if title_match:
+                            _llm_title = title_match.group(1).strip()
+                            if _llm_title:
+                                doc_boundary_title = _llm_title
+                                print(f"  📝 LLM detected title: {doc_boundary_title}")
+
+                    batch_start = batch_end + 1
+
+                if not body_found:
+                    print("  ⚠️  Body boundary not found in any batch, using heuristic fallback")
+            except Exception as e:
+                print(f"  ⚠️  Body boundary detection failed ({str(e)[:80]}), using heuristic fallback")
+
             # Paddle path: use labeled blocks directly — no LLM classification needed
             from src.chunker import create_chunks_from_blocks, get_chunk_stats
             chunks = create_chunks_from_blocks(labeled_blocks, max_tokens=MAX_CHUNK_TOKENS)
@@ -434,17 +516,18 @@ Options:
         "sections": doc_scan.get("sections", []),
     }
 
-    # For paddle: override title/author from paddle's exact labels
-    # (the LLM scan can truncate titles)
+    # For paddle: use LLM boundary detection for title + author
+    # (more reliable than paddle labels which can pick up series titles)
     if use_paddle:
         try:
-            for b in labeled_blocks:
-                if b["label"] in ("doc_title", "title"):
-                    paddle_title = b["text"].replace("\n", " ").strip()
-                    paddle_title = paddle_title.lstrip("# ").strip()
-                    if paddle_title:
-                        doc_metadata["title"] = paddle_title
-                    break
+            if doc_boundary_title:
+                doc_metadata["title"] = doc_boundary_title
+        except NameError:
+            pass
+
+        try:
+            if doc_boundary_author:
+                doc_metadata["author"] = doc_boundary_author
         except NameError:
             pass
 
