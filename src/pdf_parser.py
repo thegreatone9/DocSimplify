@@ -1124,6 +1124,60 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
         print(f"  🗑️  Skipped {len(skipped_pages)} empty pages: {skipped_pages}")
     for label, count in sorted(region_counts.items()):
         print(f"     {label}: {count}")
+    # ── Deduplicate reference blocks ────────────────────────────────────
+    # PaddleOCR sometimes emits both a single "reference" blob (all refs in one)
+    # AND individual "reference_content" entries. Drop the blob when individuals exist.
+    has_ref_content = any(b["label"] == "reference_content" for b in labeled_blocks)
+    if has_ref_content:
+        before = len(labeled_blocks)
+        labeled_blocks = [
+            b for b in labeled_blocks
+            if b["label"] != "reference"
+        ]
+        dropped = before - len(labeled_blocks)
+        if dropped:
+            print(f"  🔗 Dropped {dropped} duplicate reference blob(s) (individual entries exist)")
+
+    # ── Cross-page paragraph merging ─────────────────────────────────────
+    # PaddleOCR extracts per page, so a paragraph spanning two pages becomes
+    # two separate blocks. Detect and merge them.
+    merged_blocks = []
+    merge_count = 0
+    i = 0
+    while i < len(labeled_blocks):
+        block = labeled_blocks[i]
+
+        # Check if this block should merge with the next
+        if i + 1 < len(labeled_blocks):
+            next_block = labeled_blocks[i + 1]
+            should_merge = (
+                block["label"] == "text"
+                and next_block["label"] == "text"
+                and next_block["page"] == block["page"] + 1
+                and block["section_type"] == next_block["section_type"]
+                and block["text"].strip()
+                and next_block["text"].strip()
+                # Current block doesn't end with sentence-ending punctuation
+                and not block["text"].rstrip()[-1] in ".!?\"'"
+                # Next block starts with a lowercase letter
+                and next_block["text"].lstrip()[0].islower()
+            )
+            if should_merge:
+                # Merge: concatenate text, keep first block's metadata
+                merged_text = block["text"].rstrip() + " " + next_block["text"].lstrip()
+                merged = dict(block)
+                merged["text"] = merged_text
+                merged_blocks.append(merged)
+                merge_count += 1
+                i += 2  # Skip the next block (already merged)
+                continue
+
+        merged_blocks.append(block)
+        i += 1
+
+    if merge_count > 0:
+        print(f"  🔗 Merged {merge_count} cross-page paragraph split(s)")
+    labeled_blocks = merged_blocks
 
     # Summarize labeled blocks
     block_types = {}

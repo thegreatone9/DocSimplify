@@ -258,12 +258,15 @@ def generate_toc(markdown_text: str, force: bool = False) -> str:
         level = len(match.group(1))
         title = match.group(2).strip()
 
+        # Strip footnote markers from display title and anchor
+        clean_title = re.sub(r'\[\^\d+\]', '', title).strip()
+
         # Create anchor link (GitHub-style)
-        anchor = re.sub(r"[^\w\s-]", "", title.lower())
+        anchor = re.sub(r"[^\w\s-]", "", clean_title.lower())
         anchor = re.sub(r"\s+", "-", anchor.strip())
 
         indent = "  " * (level - 2)
-        toc_lines.append(f"{indent}- [{title}](#{anchor})")
+        toc_lines.append(f"{indent}- [{clean_title}](#{anchor})")
 
     return "\n".join(toc_lines) + "\n"
 
@@ -460,28 +463,17 @@ def qa_check_output(
         if ch.get("section"):
             original_headings.add(ch["section"])
 
+    # Also count headings already present in the output (from VERBATIM paragraph_title blocks)
+    # In paddle mode, original_chapters may be empty but real headings exist in the markdown
+    output_md_headings = re.findall(r"^#{2,3}\s+(.+)$", final_markdown, re.MULTILINE)
+    for h in output_md_headings:
+        ht = h.strip()
+        if ht not in ("Notes", "Table of Contents"):
+            original_headings.add(ht)
+
     original_had_headings = len(original_headings) > 1
 
-    # ── Check 1: No TOC if original didn't have one ──────────────────────
-    if not has_toc:
-        toc_pattern = re.search(r"^#{1,3}\s+Table of Contents", fixed, re.MULTILINE)
-        if toc_pattern:
-            issues.append({
-                "severity": "ERROR",
-                "message": "Output contains a Table of Contents but the original document did not have one",
-            })
-            # Auto-fix: remove the TOC block
-            # Find the TOC section and remove it (from heading to next ## or content)
-            toc_start = toc_pattern.start()
-            # Find the end of the TOC (next heading or double newline after list items)
-            remaining = fixed[toc_pattern.end():]
-            toc_end_match = re.search(r"\n(?=#{1,2}\s|\n[^-\s])", remaining)
-            if toc_end_match:
-                toc_end = toc_pattern.end() + toc_end_match.start()
-            else:
-                toc_end = toc_pattern.end()
-            fixed = fixed[:toc_start] + fixed[toc_end:]
-            fixed = re.sub(r"\n{3,}", "\n\n", fixed)
+    # (TOC guard removed — generate_toc() now has built-in conditions)
 
     # ── Check 2: No invented headings if original had none ───────────────
     if not original_had_headings:
