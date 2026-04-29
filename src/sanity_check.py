@@ -70,12 +70,6 @@ class SanityResult:
 
 # ── Thresholds (tunable) ────────────────────────────────────────────────────
 
-# If avg chars per page is below this, it's likely scanned / image-only
-SCANNED_PDF_CHARS_PER_PAGE = 200
-
-# If more than this % of pages have images but < 100 chars of text, it's image-heavy
-IMAGE_HEAVY_THRESHOLD_PCT = 60
-
 # If more than this % of content is math symbols / LaTeX commands, it's math-heavy
 MATH_HEAVY_THRESHOLD_PCT = 5
 
@@ -83,7 +77,7 @@ MATH_HEAVY_THRESHOLD_PCT = 5
 NON_ENGLISH_THRESHOLD_PCT = 15
 
 # Minimum total extracted text (chars) to be worth processing
-MIN_VIABLE_CHARS = 5_000
+MIN_VIABLE_CHARS = 3_000
 
 # If more than this % of lines look like table rows, it's table-heavy
 TABLE_HEAVY_THRESHOLD_PCT = 25
@@ -134,7 +128,16 @@ TABLE_ROW_PATTERN = re.compile(
 
 def check_pdf(pdf_path: str | Path) -> SanityResult:
     """
-    Run all sanity checks on a PDF file.
+    Phase 1: Pre-extraction sanity check on a PDF file.
+
+    Only checks structural/file-level properties that don't need text content:
+      - Corrupted / unreadable
+      - Encrypted / password-protected
+      - Too many pages
+      - Duplicate pages
+
+    Content-based checks (prose density, math, language, etc.) run separately
+    via check_extracted_content() after OCR extraction.
 
     Args:
         pdf_path: Path to the PDF file.
@@ -197,91 +200,81 @@ def check_pdf(pdf_path: str | Path) -> SanityResult:
             stats={"pages": page_count},
         )
 
-    # ── Extract text and image stats per page ──
-    page_chars = []
-    page_image_counts = []
+    # ── Check 3: Duplicate pages ──
     full_text_parts = []
-
     for page in doc:
         try:
             text = page.get_text("text")
         except Exception:
             text = ""
-        page_chars.append(len(text))
         full_text_parts.append(text)
-
-        try:
-            images = page.get_images(full=False)
-        except Exception:
-            images = []
-        page_image_counts.append(len(images))
 
     doc.close()
 
-    full_text = "\n".join(full_text_parts)
-    total_chars = sum(page_chars)
-    avg_chars_per_page = total_chars / page_count if page_count > 0 else 0
-
-    # Build result
     result = SanityResult(passed=True)
+    result.stats = {"pages": page_count}
+
+    _check_duplicate_pages(full_text_parts, result)
+
+    return result
+
+
+def check_extracted_content(
+    text: str,
+    page_count: int,
+    source_label: str = "document",
+) -> SanityResult:
+    """
+    Phase 2: Post-extraction sanity check on the actual text content.
+
+    Runs AFTER OCR/extraction so it works for both embedded-text and scanned PDFs.
+    Checks the extracted text for suitability:
+      - Minimum viable content length
+      - Prose density (rejects forms, certificates, slide decks)
+      - Math-heavy content
+      - Non-English / mixed-language
+      - Table/data-heavy
+      - Source code
+
+    Args:
+        text:         The full extracted text (from PaddleOCR or PyMuPDF).
+        page_count:   Number of pages in the document.
+        source_label: Label for error messages (e.g., "PDF" or "EPUB").
+
+    Returns:
+        SanityResult with pass/fail, warnings, failures, and stats.
+    """
+    result = SanityResult(passed=True)
+    total_chars = len(text)
     result.stats = {
-        "pages": page_count,
         "total_chars": total_chars,
-        "avg_chars_per_page": round(avg_chars_per_page),
+        "pages": page_count,
+        "avg_chars_per_page": round(total_chars / page_count) if page_count > 0 else 0,
     }
 
-    # ── Check 3: Scanned / image-only PDF ──
-    if avg_chars_per_page < SCANNED_PDF_CHARS_PER_PAGE:
-        result.passed = False
-        result.failures.append(
-            f"SCANNED / IMAGE-ONLY PDF detected. Average {avg_chars_per_page:.0f} chars/page "
-            f"(threshold: {SCANNED_PDF_CHARS_PER_PAGE}). This PDF likely contains scanned "
-            "images instead of selectable text. You'd need OCR (Tesseract/EasyOCR) first, "
-            "which our pipeline doesn't support yet."
-        )
-
-    # ── Check 4: Image-heavy ──
-    pages_mostly_images = sum(
-        1 for chars, imgs in zip(page_chars, page_image_counts)
-        if imgs > 0 and chars < 100
-    )
-    image_heavy_pct = (pages_mostly_images / page_count * 100) if page_count > 0 else 0
-    result.stats["image_heavy_pages_pct"] = round(image_heavy_pct, 1)
-
-    if image_heavy_pct > IMAGE_HEAVY_THRESHOLD_PCT:
-        result.passed = False
-        result.failures.append(
-            f"IMAGE-HEAVY document. {image_heavy_pct:.0f}% of pages are mostly images with "
-            f"little text. Our pipeline cannot process diagrams, charts, or infographics. "
-            f"The simplified output would be missing most of the book's content."
-        )
-
-    # ── Check 5: Math-heavy ──
-    _check_math_heavy(full_text, result)
-
-    # ── Check 6: Non-English ──
-    _check_non_english(full_text, result)
-
-    # ── Check 7: Minimum viable content ──
+    # ── Check 1: Minimum viable content ──
     if total_chars < MIN_VIABLE_CHARS:
         result.passed = False
         result.failures.append(
             f"TOO LITTLE TEXT. Only {total_chars:,} characters extracted from {page_count} pages. "
-            f"Minimum is {MIN_VIABLE_CHARS:,}. The document may be mostly images, scanned, "
-            "or corrupted."
+            f"Minimum is {MIN_VIABLE_CHARS:,}. The {source_label} may be mostly images, "
+            "a certificate, a form, or corrupted."
         )
 
-    # ── Check 8: Table-heavy ──
-    _check_table_heavy(full_text, result)
+    # ── Check 2: Low prose density ──
+    _check_prose_density(text, page_count, result)
 
-    # ── Check 9: Low prose density (infographics, timelines, posters) ──
-    _check_prose_density(full_text, page_count, result)
+    # ── Check 3: Math-heavy ──
+    _check_math_heavy(text, result)
 
-    # ── Check 10: Source code / programming document ──
-    _check_source_code(full_text, result)
+    # ── Check 4: Non-English ──
+    _check_non_english(text, result)
 
-    # ── Check 11: Duplicate pages (print spooler errors) ──
-    _check_duplicate_pages(full_text_parts, result)
+    # ── Check 5: Table-heavy ──
+    _check_table_heavy(text, result)
+
+    # ── Check 6: Source code ──
+    _check_source_code(text, result)
 
     return result
 

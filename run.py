@@ -140,14 +140,14 @@ Options:
                         help=f"Ollama model name (default: {MODEL_NAME})")
     parser.add_argument("--surya", action="store_true",
                         help="Use surya neural layout model (for scanned/image-heavy PDFs)")
-    parser.add_argument("--paddle", action="store_true",
-                        help="Use PaddleOCR layout detection (recommended for academic PDFs)")
+    parser.add_argument("--heuristic", action="store_true",
+                        help="Use heuristic parser (PyMuPDF) instead of PaddleOCR")
     parser.add_argument("--gemini", action="store_true",
                         help="Use Gemini API (requires GEMINI_API_KEY in config)")
     parser.add_argument("--groq", action="store_true",
                         help="Use Groq API with Llama 3.3 70B (fast, free, generous limits)")
-    parser.add_argument("--paragraph", action="store_true",
-                        help="Simplify paragraph-by-paragraph (better quality for weaker models)")
+    parser.add_argument("--chunk", action="store_true",
+                        help="Simplify whole chunks instead of paragraph-by-paragraph (faster but lower quality)")
     parser.add_argument("--title", type=str, default=None,
                         help="Override document title (otherwise auto-detected from PDF)")
     parser.add_argument("--author", type=str, default=None,
@@ -162,7 +162,7 @@ Options:
     workers = args.workers
     model = args.model
     use_surya = args.surya
-    use_paddle = args.paddle
+    use_paddle = not args.heuristic
     use_gemini = args.gemini
     use_groq = args.groq
 
@@ -176,8 +176,8 @@ Options:
         if "8b" in model.lower():
             workers = 1  # 8B has tight 6K TPM limit
 
-    # Paragraph mode must be sequential (many sub-requests per chunk)
-    if args.paragraph:
+    # Paragraph mode (default) must be sequential (many sub-requests per chunk)
+    if not args.chunk:
         workers = 1
 
     # Check layout engine availability
@@ -298,6 +298,17 @@ Options:
             from src.pdf_parser import extract_pdf_with_paddle, detect_chapters, validate_extraction
             print("  🧠 Running PaddleOCR layout detection...")
             markdown, paddle_structure, labeled_blocks = extract_pdf_with_paddle(input_path)
+
+            # ── Post-extraction content sanity check ──
+            # Now that we have actual OCR'd text, verify it's prose-worthy
+            from src.sanity_check import check_extracted_content
+            extracted_text = "\n".join(b["text"] for b in labeled_blocks if b.get("text"))
+            page_count = paddle_structure.get("pages", len(set(b["page"] for b in labeled_blocks)))
+            content_check = check_extracted_content(extracted_text, page_count, source_label="PDF")
+            print(content_check.report())
+            if not content_check.passed:
+                print("\n🛑 Aborting. The extracted content is not suitable for simplification.")
+                raise SystemExit("Content sanity check failed. See report above.")
 
             # ── LLM body boundary detection (batched, ~1000 tokens/batch) ──
             # Sends block previews in expanding batches until body start
@@ -539,6 +550,46 @@ Options:
     if args.author:
         doc_metadata["author"] = args.author
 
+    # ── Hallucination check: verify title/author against source text ──────
+    # Only for scanned PDFs where OCR noise causes the LLM to fabricate names.
+    # Text-based PDFs get clean input, so the LLM reliably echoes real metadata.
+    is_scanned = False
+    try:
+        is_scanned = paddle_structure.get("is_scanned", False)
+    except NameError:
+        pass
+
+    if is_scanned and not args.author and not args.title:
+        try:
+            source_text = " ".join(
+                b.get("text", "") for b in labeled_blocks
+            ).lower()
+
+            def _verify_against_source(value: str, label: str) -> str | None:
+                """Return value if it appears in source, else None."""
+                if not value:
+                    return None
+                # Split into significant words (skip short/common ones)
+                words = [w for w in value.split() if len(w) > 2]
+                if not words:
+                    return value  # Nothing to check
+                found = sum(1 for w in words if w.lower() in source_text)
+                ratio = found / len(words)
+                if ratio < 0.8:
+                    print(f"  ⚠️  Dropping hallucinated {label}: \"{value}\" "
+                          f"({found}/{len(words)} words found in source)")
+                    return None
+                return value
+
+            doc_metadata["title"] = _verify_against_source(
+                doc_metadata.get("title"), "title"
+            )
+            doc_metadata["author"] = _verify_against_source(
+                doc_metadata.get("author"), "author"
+            )
+        except NameError:
+            pass  # labeled_blocks not available (non-paddle path)
+
     print(f"  📌 Title: {doc_metadata['title']}")
     print(f"  📌 Author: {doc_metadata['author']}")
 
@@ -605,7 +656,7 @@ Options:
         max_workers=workers,
         checkpoint_path=CHECKPOINT_FILE,
 
-        paragraph_mode=args.paragraph,
+        paragraph_mode=not args.chunk,
         strict_paragraphs=use_paddle,
     )
 

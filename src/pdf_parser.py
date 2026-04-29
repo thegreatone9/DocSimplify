@@ -682,17 +682,34 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
     pdf_path = Path(pdf_path)
     doc = pymupdf.open(str(pdf_path))
 
+    # ── Check if we need OCR (scanned PDF detection) ─────────────────────
+    # Sample first few pages — if they have little embedded text, load OCR
+    sample_pages = min(3, len(doc))
+    total_sample_chars = sum(
+        len(doc[i].get_text("text").strip()) for i in range(sample_pages)
+    )
+    needs_ocr = total_sample_chars < sample_pages * 100  # < 100 chars/page avg
+    ocr_engine = None
+
+    # Use higher DPI for scanned PDFs — more pixels per character = better OCR
+    render_dpi = 300 if needs_ocr else 150
+
     # ── Render all pages as images ───────────────────────────────────────
-    print(f"  📐 Rendering {len(doc)} pages...")
+    print(f"  📐 Rendering {len(doc)} pages at {render_dpi} DPI...")
     images = []
     for page in doc:
-        pix = page.get_pixmap(dpi=150)
+        pix = page.get_pixmap(dpi=render_dpi)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         images.append(img)
 
     # ── Load PaddleOCR layout model ──────────────────────────────────────
     print(f"  🧠 Loading PaddleOCR layout model...")
     layout_engine = LayoutDetection()
+
+    if needs_ocr:
+        from paddleocr import PaddleOCR
+        print("  📷 Scanned PDF detected — loading OCR engine...")
+        ocr_engine = PaddleOCR(lang='en')
 
     # ── Run layout detection on each page ────────────────────────────────
     print(f"  🔍 Detecting layout on {len(images)} pages...")
@@ -705,9 +722,9 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
     for page_idx in range(len(doc)):
         page = doc[page_idx]
 
-        # Skip blank pages
         page_text = page.get_text("text").strip()
-        if not page_text:
+        if not page_text and not ocr_engine:
+            # No embedded text and no OCR engine — truly blank page
             skipped_pages.append(page_idx + 1)
             continue
 
@@ -850,6 +867,33 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
                 # Average font size for this region
                 if matching_lines:
                     region_font_size = sum(s["font_size"] for s in matching_lines) / len(matching_lines)
+
+            # ── OCR fallback for scanned pages ────────────────────────
+            if not text.strip() and ocr_engine and label not in ("image", "figure"):
+                # Crop the region from the page image and run OCR
+                try:
+                    img_np_page = np.array(images[page_idx])
+                    # Coords are in image pixel space (from layout detection)
+                    crop_x0 = max(0, int(float(coord[0])))
+                    crop_y0 = max(0, int(float(coord[1])))
+                    crop_x1 = min(img_np_page.shape[1], int(float(coord[2])))
+                    crop_y1 = min(img_np_page.shape[0], int(float(coord[3])))
+                    region_img = img_np_page[crop_y0:crop_y1, crop_x0:crop_x1]
+
+                    if region_img.size > 0:
+                        ocr_result = ocr_engine.predict(region_img)
+                        if ocr_result and len(ocr_result) > 0:
+                            item = ocr_result[0]
+                            # OCRResult has rec_texts attribute
+                            rec_texts = (
+                                item.get('rec_texts', [])
+                                if isinstance(item, dict)
+                                else getattr(item, 'rec_texts', [])
+                            )
+                            if rec_texts:
+                                text = " ".join(t for t in rec_texts if t.strip())
+                except Exception:
+                    pass  # OCR failed for this region — skip silently
 
             # ── Special handling: images ──────────────────────────────
             if label in ("image", "figure") and not text:
@@ -1116,7 +1160,7 @@ def extract_pdf_with_paddle(pdf_path: str | Path) -> tuple[str, dict, list[dict]
         "region_counts": region_counts,
         "total_regions": sum(region_counts.values()),
         "footnotes_found": len(footnotes),
-        "is_scanned": False,
+        "is_scanned": needs_ocr,
     }
 
     print(f"  📊 Paddle detected: {structure['total_regions']} regions across {len(images)} pages")
