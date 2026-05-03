@@ -8,60 +8,124 @@ and book summary generation. Centralized so they're easy to iterate on.
 import json
 
 
-def build_body_boundary_prompt(blocks_preview: list[dict]) -> tuple[str, str]:
+def build_page_classification_prompt(page_text: str) -> tuple[str, str]:
     """
-    Build a prompt to detect where the main body text starts.
-
-    Given a list of labeled blocks from the document's first pages,
-    asks the LLM to identify which block index begins the actual
-    authored prose (not frontmatter like endorsements, copyright, TOC, etc).
+    Build a prompt to classify a single page as body or frontmatter.
 
     Args:
-        blocks_preview: List of dicts with keys: index, label, page, preview.
+        page_text: The full text content of one page (typically first ~400 words).
 
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
-    system_prompt = """You identify where the main body text begins in a document.
+    system_prompt = """You classify document pages as body content or front matter.
 
-You will receive a numbered list of text blocks from the start of a document, 
-with their page numbers and content previews. Your job is to find the FIRST block 
-that contains actual authored prose — the main content the author wrote.
+Read the page text and decide: does this page contain genuine BODY prose — 
+substantive, flowing content that forms part of the main work — or is it 
+preliminary/non-essential FRONTMATTER material?
 
-NOT body text (skip ALL of these):
-- Endorsement quotes, blurbs, or reviews from other people
-- Publisher information, series descriptions, editorial board info
-- Descriptions of other books in the same series ("Also available...")
-- Title pages, author names, subtitle lines
-- Copyright notices, ISBN numbers, legal text
-- Table of contents, list of figures/tables
-- Dedications, acknowledgments, forewords by others
-- Any text ABOUT the book/document rather than BY the author
+FRONTMATTER includes:
+- Endorsement quotes or blurbs praising the book/document
+- Publisher series descriptions ("This series aims to...")
+- Catalog listings of other books ("Also available...")
+- Dedications, acknowledgments
+- Author biographies or affiliation lists
+- Title pages, half-title pages
+- Table of contents, list of figures, list of tables
+- Any text ABOUT the book rather than the book's actual content
 
-IS body text (look for these — usually starts with a section heading):
-- "Introduction", "Chapter 1", or the first numbered section
-- The first paragraph where the author presents THEIR OWN ideas/argument
-- Typically signaled by a paragraph_title block like "## Introduction"
+BODY includes:
+- The author's own arguments, analysis, narrative, or exposition
+- Introduction, preface, or foreword that discusses the document's SUBJECT
+- Abstract or executive summary of the document's content
+- Any substantive prose that contributes to understanding the topic
 
-IMPORTANT: Look for a paragraph_title block (section heading) that marks the 
-start of authored content. The body almost always starts with a heading, not 
-with a plain text block.
+KEY TEST: Is this text BY the author about the SUBJECT of the document? 
+If yes → body. If it's about the book itself, by others, or purely 
+administrative → frontmatter.
 
-Reply with ONLY a JSON object: {"body_starts_at": <block_index>, "title": "<document title>", "author": "<author name(s)>"}
-The title is the MAIN title of the document — not a series name or publisher name.
-The author is the person who WROTE the document — NOT editors, series editors, or endorsers.
+Reply with ONLY a JSON object:
+{"verdict": "body" or "frontmatter", "reason": "<one sentence>"}
 Nothing else."""
 
-    blocks_text = "\n".join(
-        f"Block {b['index']} (page {b['page']}, {b['label']}): {b['preview']}"
-        for b in blocks_preview
-    )
+    user_prompt = f"""Classify this page:
 
-    user_prompt = f"""Identify the body start, title, and author of this document.
+{page_text}
 
-{blocks_text}
+Reply with ONLY: {{"verdict": "body" or "frontmatter", "reason": "<one sentence>"}}"""
 
-Reply with ONLY: {{"body_starts_at": <index>, "title": "<title>", "author": "<name(s)>"}}"""
+    return system_prompt, user_prompt
+
+
+def build_metadata_extraction_prompt(pages_text: str) -> tuple[str, str]:
+    """
+    Build a prompt to extract the document title and author from initial pages.
+
+    Args:
+        pages_text: Combined text from the first few pages of the document.
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    system_prompt = """You extract the title and author from a document's opening pages.
+
+The title is the MAIN title of the document — not a series name, publisher 
+name, or chapter title. If there is a subtitle, include it.
+
+The author is the person who WROTE the document — NOT editors, series editors, 
+endorsers, or contributors to other works mentioned on these pages.
+
+If you cannot determine the title or author, use an empty string.
+
+Reply with ONLY a JSON object:
+{"document_type": "<type>", "title": "<document title>", "author": "<author name(s)>"}
+Nothing else."""
+
+    user_prompt = f"""Extract the title and author from these opening pages:
+
+{pages_text}
+
+Reply with ONLY: {{"document_type": "<type>", "title": "<title>", "author": "<name(s)>"}}"""
+
+    return system_prompt, user_prompt
+
+
+def build_block_metadata_prompt(block_text: str) -> tuple[str, str]:
+    """
+    Build a prompt to classify a short text block as publication metadata
+    or authored content.
+
+    Args:
+        block_text: The full text of a short block.
+
+    Returns:
+        Tuple of (system_prompt, user_prompt).
+    """
+    system_prompt = """You classify short text blocks from a document.
+
+Is this block PUBLICATION METADATA or AUTHORED CONTENT?
+
+METADATA — text about the publication itself, not its subject:
+- Author names, affiliations, credentials
+- Journal/volume/issue/page information
+- Classification codes, keywords lists
+- Dates (received, accepted, published)
+- Contact information, correspondence details
+- Any administrative or bibliographic data
+
+CONTENT — text that contributes to the document's message:
+- Arguments, analysis, narrative, or exposition
+- Section headings for the main content
+- Abstracts or summaries of the document's subject
+
+Reply with ONLY: {"verdict": "metadata" or "content"}
+Nothing else."""
+
+    user_prompt = f"""Classify this block:
+
+{block_text}
+
+Reply with ONLY: {{"verdict": "metadata" or "content"}}"""
 
     return system_prompt, user_prompt
 

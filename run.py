@@ -111,6 +111,19 @@ def _find_input_file() -> Path:
     return candidates[0]
 
 
+def _parse_skip_pages(spec: str) -> set[int]:
+    """Parse a skip-pages specification like '1-5,8,10' into a set of ints."""
+    pages = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            pages.update(range(int(lo), int(hi) + 1))
+        elif part:
+            pages.add(int(part))
+    return pages
+
+
 def main():
     _setup_logging()
     parser = argparse.ArgumentParser(
@@ -152,12 +165,17 @@ Options:
                         help="Override document title (otherwise auto-detected from PDF)")
     parser.add_argument("--author", type=str, default=None,
                         help="Override author name (otherwise auto-detected from PDF)")
+    parser.add_argument("--skip-pages", type=str, default=None,
+                        help="Pages to skip as front matter, e.g. '1-5,8,10' (1-indexed)")
 
     args = parser.parse_args()
 
     # ── Auto-detect input file ───────────────────────────────────────────────
     input_path = _find_input_file()
     ext = input_path.suffix.lower()
+
+    if args.skip_pages and ext == ".epub":
+        print("  ⚠️  --skip-pages is not supported for EPUB inputs (ignored)")
 
     workers = args.workers
     model = args.model
@@ -300,89 +318,289 @@ Options:
                 print("\n🛑 Aborting. The extracted content is not suitable for simplification.")
                 raise SystemExit("Content sanity check failed. See report above.")
 
-            # ── LLM body boundary detection (batched, ~1000 tokens/batch) ──
-            # Sends block previews in expanding batches until body start
-            # is found. Falls back to heuristic if all batches exhausted.
-            print("  🔎 Detecting body text boundary...")
+            # ── Page-level front-matter detection ────────────────────────────
+            # Stage 0: user override  →  Stage 1: group by page  →
+            # Stage 2: heuristic pre-filter  →  Stage 3: LLM classification  →
+            # Stage 4: lookahead boundary  →  Stage 5: apply to blocks
+            print("  🔎 Detecting front-matter pages...")
             doc_boundary_author = None
             doc_boundary_title = None
             try:
-                from src.prompts import build_body_boundary_prompt
+                from collections import defaultdict
+                from src.prompts import build_page_classification_prompt, build_metadata_extraction_prompt
                 import re as _re
 
-                CHAR_BUDGET = 4000  # ~1000 tokens at ~4 chars/token
-                body_found = False
-                batch_start = 0
-                batch_num = 0
+                # ── Stage 0: User override (--skip-pages) ──
+                user_skip = set()
+                if args.skip_pages:
+                    user_skip = _parse_skip_pages(args.skip_pages)
+                    print(f"     User skip pages: {sorted(user_skip)}")
 
-                while batch_start < len(labeled_blocks) and not body_found:
-                    blocks_preview = []
-                    chars_used = 0
-                    batch_end = batch_start
+                # ── Stage 1: Group blocks by page ──
+                page_blocks = defaultdict(list)
+                for i, block in enumerate(labeled_blocks):
+                    page_blocks[block["page"]].append(i)
 
-                    for i in range(batch_start, len(labeled_blocks)):
-                        line = (f"Block {i} (page {labeled_blocks[i]['page']}, "
-                                f"{labeled_blocks[i]['label']}): "
-                                f"{labeled_blocks[i]['text'][:80]}")
-                        if chars_used + len(line) > CHAR_BUDGET and blocks_preview:
-                            break
-                        blocks_preview.append({
-                            "index": i,
-                            "page": labeled_blocks[i]["page"],
-                            "label": labeled_blocks[i]["label"],
-                            "preview": labeled_blocks[i]["text"][:80].replace("\n", " "),
-                        })
-                        chars_used += len(line)
-                        batch_end = i
-
-                    if not blocks_preview:
-                        break
-
-                    batch_num += 1
-                    print(f"     Batch {batch_num}: blocks {batch_start}-{batch_end} "
-                          f"(pages {blocks_preview[0]['page']}-{blocks_preview[-1]['page']})")
-
-                    bnd_sys, bnd_usr = build_body_boundary_prompt(blocks_preview)
-                    bnd_response = llm.generate(
-                        prompt=bnd_usr, system_prompt=bnd_sys, temperature=0.0,
+                page_texts = {}
+                for pg, indices in page_blocks.items():
+                    page_texts[pg] = "\n".join(
+                        labeled_blocks[i]["text"] for i in indices
                     )
 
-                    match = _re.search(r'"body_starts_at"\s*:\s*(\d+)', bnd_response)
-                    if match:
-                        body_start_idx = int(match.group(1))
-                        if 0 < body_start_idx < len(labeled_blocks):
-                            absorbed = 0
-                            for j in range(body_start_idx):
-                                # Keep TOC blocks (content label) as VERBATIM
-                                if labeled_blocks[j]["label"] == "content":
-                                    continue
-                                labeled_blocks[j]["section_type"] = "FRONT_MATTER"
-                                absorbed += 1
-                            print(f"  ✅ LLM: body starts at block {body_start_idx} "
-                                  f"(page {labeled_blocks[body_start_idx]['page']})")
-                            print(f"     Absorbed {absorbed} frontmatter block(s)")
-                            body_found = True
+                sorted_pages = sorted(page_blocks.keys())
+                total_pages = len(sorted_pages)
 
-                        author_match = _re.search(r'"author"\s*:\s*"([^"]+)"', bnd_response)
-                        if author_match:
-                            _llm_author = author_match.group(1).strip()
-                            if _llm_author:
-                                doc_boundary_author = _llm_author
-                                print(f"  📝 LLM detected author: {doc_boundary_author}")
+                # page_verdicts: "frontmatter", "body", or None (unresolved)
+                page_verdicts = {}
 
-                        title_match = _re.search(r'"title"\s*:\s*"([^"]+)"', bnd_response)
-                        if title_match:
-                            _llm_title = title_match.group(1).strip()
-                            if _llm_title:
-                                doc_boundary_title = _llm_title
-                                print(f"  📝 LLM detected title: {doc_boundary_title}")
+                # Mark user-skipped pages immediately
+                for pg in user_skip:
+                    if pg in page_blocks:
+                        page_verdicts[pg] = "frontmatter"
 
-                    batch_start = batch_end + 1
+                # ── Stage 2: Heuristic pre-filter ──
+                # First 20 pages: full heuristic checks
+                # ALL pages: low-content check (catches mid-document chapter dividers)
+                _FM_PATTERNS = [
+                    r"(?i)\ball\s+rights\s+reserved\b",
+                    r"(?i)\bpublished\s+by\b",
+                    r"(?i)\balso\s+available\b",
+                    r"(?i)\bisbn\b",
+                ]
+                _FM_PATTERNS_COMPILED = [_re.compile(p) for p in _FM_PATTERNS]
 
-                if not body_found:
-                    print("  ⚠️  Body boundary not found in any batch, using heuristic fallback")
+                for pg in sorted_pages:
+                    if pg in page_verdicts:
+                        continue  # already resolved
+
+                    text = page_texts[pg]
+                    word_count = len(text.split())
+
+                    # Low-content check — applies to ALL pages
+                    if word_count < 50:
+                        page_verdicts[pg] = "frontmatter"
+                        continue
+
+                    # Full heuristic checks — first 20 pages only
+                    if pg <= 20:
+                        # Copyright symbol
+                        if "©" in text:
+                            page_verdicts[pg] = "frontmatter"
+                            continue
+
+                        # Pattern-based checks
+                        if any(pat.search(text) for pat in _FM_PATTERNS_COMPILED):
+                            page_verdicts[pg] = "frontmatter"
+                            continue
+
+                        # TOC detection: PaddleOCR's 'content' label specifically
+                        # means table-of-contents entries — deterministic signal
+                        has_toc = any(
+                            labeled_blocks[idx]["label"] == "content"
+                            for idx in page_blocks[pg]
+                        )
+                        if has_toc:
+                            page_verdicts[pg] = "frontmatter"
+                            continue
+
+                heuristic_fm = sum(1 for v in page_verdicts.values() if v == "frontmatter")
+                print(f"     Heuristic: {heuristic_fm} page(s) flagged as front matter")
+
+                # ── Stage 3: LLM classification on ambiguous pages ──
+                # Only classify unresolved pages within the first 20
+                ambiguous = [pg for pg in sorted_pages if pg <= 20 and pg not in page_verdicts]
+                llm_calls = 0
+
+                for pg in ambiguous:
+                    text = page_texts[pg]
+                    # Send first ~400 words (roughly ~2000 chars)
+                    page_preview = " ".join(text.split()[:400])
+
+                    sys_p, usr_p = build_page_classification_prompt(page_preview)
+                    response = llm.generate(prompt=usr_p, system_prompt=sys_p, temperature=0.0)
+                    llm_calls += 1
+
+                    verdict_match = _re.search(r'"verdict"\s*:\s*"(body|frontmatter)"', response)
+                    if verdict_match:
+                        page_verdicts[pg] = verdict_match.group(1)
+                    else:
+                        # If LLM response is unparseable, default to body (safe)
+                        page_verdicts[pg] = "body"
+
+                    reason_match = _re.search(r'"reason"\s*:\s*"([^"]*)"', response)
+                    reason = reason_match.group(1) if reason_match else ""
+                    print(f"     Page {pg}: {page_verdicts[pg]}"
+                          f"{' — ' + reason if reason else ''}")
+
+                if llm_calls:
+                    print(f"     LLM classified {llm_calls} ambiguous page(s)")
+
+                # ── Stage 4: Lookahead boundary confirmation ──
+                # Walk pages: when we see "body", confirm with lookahead.
+                # If lookahead fails → preface (mark VERBATIM, keep scanning).
+                lookahead_depth = 1 if total_pages < 10 else 2
+                confirmed_body_start = None
+                preface_pages = set()
+
+                for i, pg in enumerate(sorted_pages):
+                    verdict = page_verdicts.get(pg)
+                    if verdict != "body":
+                        continue
+
+                    # Check next N pages
+                    lookahead_ok = True
+                    for offset in range(1, lookahead_depth + 1):
+                        if i + offset < len(sorted_pages):
+                            next_pg = sorted_pages[i + offset]
+                            next_v = page_verdicts.get(next_pg, "body")
+                            if next_v == "frontmatter":
+                                lookahead_ok = False
+                                break
+                        # If we're at the end of pages, count as ok
+                        # (document might just be short)
+
+                    if lookahead_ok:
+                        confirmed_body_start = pg
+                        break
+                    else:
+                        # False positive — likely a preface
+                        preface_pages.add(pg)
+
+                if confirmed_body_start is not None:
+                    print(f"  ✅ Body confirmed at page {confirmed_body_start} "
+                          f"(lookahead={lookahead_depth})")
+                else:
+                    # No confirmed body start — treat everything as body
+                    confirmed_body_start = sorted_pages[0] if sorted_pages else 1
+                    print(f"  ⚠️  No confirmed body start, treating all pages as body")
+
+                if preface_pages:
+                    print(f"     Preface pages (kept as verbatim): {sorted(preface_pages)}")
+
+                # ── Stage 5: Apply verdicts to blocks ──
+                discarded = 0
+                verbatim_kept = 0
+                for pg in sorted_pages:
+                    if pg >= confirmed_body_start:
+                        break  # everything from here onward keeps default section_type
+                    for idx in page_blocks[pg]:
+                        if pg in preface_pages:
+                            labeled_blocks[idx]["section_type"] = "VERBATIM"
+                            verbatim_kept += 1
+                        else:
+                            labeled_blocks[idx]["section_type"] = "FRONT_MATTER"
+                            discarded += 1
+
+                # Also mark low-content pages AFTER the body start (mid-doc dividers)
+                mid_doc_flagged = 0
+                for pg in sorted_pages:
+                    if pg <= confirmed_body_start:
+                        continue
+                    if page_verdicts.get(pg) == "frontmatter":
+                        for idx in page_blocks[pg]:
+                            labeled_blocks[idx]["section_type"] = "FRONT_MATTER"
+                            mid_doc_flagged += 1
+
+                print(f"     Discarded {discarded} block(s), "
+                      f"kept {verbatim_kept} preface block(s) as verbatim")
+                if mid_doc_flagged:
+                    print(f"     Flagged {mid_doc_flagged} mid-document block(s) "
+                          f"(low-content pages)")
+
+                # ── Title/author extraction ──
+                # Combine text from first 3 pages for metadata extraction
+                meta_pages_text = "\n\n---\n\n".join(
+                    page_texts[pg] for pg in sorted_pages[:3] if pg in page_texts
+                )
+                if meta_pages_text:
+                    meta_sys, meta_usr = build_metadata_extraction_prompt(
+                        meta_pages_text[:3000]  # cap at ~750 words
+                    )
+                    meta_response = llm.generate(
+                        prompt=meta_usr, system_prompt=meta_sys, temperature=0.0,
+                    )
+                    author_match = _re.search(r'"author"\s*:\s*"([^"]*)"', meta_response)
+                    if author_match and author_match.group(1).strip():
+                        doc_boundary_author = author_match.group(1).strip()
+                        print(f"  📝 LLM detected author: {doc_boundary_author}")
+
+                    title_match = _re.search(r'"title"\s*:\s*"([^"]*)"', meta_response)
+                    if title_match and title_match.group(1).strip():
+                        doc_boundary_title = title_match.group(1).strip()
+                        print(f"  📝 LLM detected title: {doc_boundary_title}")
+
             except Exception as e:
-                print(f"  ⚠️  Body boundary detection failed ({str(e)[:80]}), using heuristic fallback")
+                print(f"  ⚠️  Front-matter detection failed ({str(e)[:80]}), "
+                      f"using all blocks as-is")
+
+            # ── Hybrid block-level metadata post-filter ──────────────────────
+            # Layer 1: Comprehensive regex for known metadata identifiers
+            #          (runs on ALL blocks — zero false-positive risk)
+            # Layer 2: LLM classification for short blocks on early pages
+            #          (catches novel metadata the regex doesn't know about)
+            import re as _re_blk
+            from src.prompts import build_block_metadata_prompt
+
+            _METADATA_PATTERNS = [
+                _re_blk.compile(r"(?i)\b[pel]-?ISSN\b"),
+                _re_blk.compile(r"(?i)\bDOI\s*:\s*10\."),
+                _re_blk.compile(r"©"),
+                _re_blk.compile(r"(?i)\bJEL\s+Classification\b"),
+                _re_blk.compile(r"(?i)\bKey\s*words?\s*:"),
+                _re_blk.compile(r"(?i)\bReceived\s*:.*Accepted\b"),
+                _re_blk.compile(r"(?i)\bCorresponding\s+author\b"),
+            ]
+
+            # Layer 1: Regex pass (all blocks)
+            regex_filtered = 0
+            for block in labeled_blocks:
+                if block["section_type"] == "FRONT_MATTER":
+                    continue
+                if any(pat.search(block["text"]) for pat in _METADATA_PATTERNS):
+                    block["section_type"] = "FRONT_MATTER"
+                    regex_filtered += 1
+            if regex_filtered:
+                print(f"  🔍 Post-filter regex: {regex_filtered} metadata block(s) removed")
+
+            # Layer 2: LLM pass on short blocks in early pages
+            # Early pages = first 10% or first 3 pages, whichever is larger
+            all_pages = sorted(set(b["page"] for b in labeled_blocks))
+            early_page_cutoff = max(3, int(len(all_pages) * 0.10))
+            early_pages = set(all_pages[:early_page_cutoff])
+
+            llm_candidates = []
+            for i, block in enumerate(labeled_blocks):
+                if block["section_type"] == "FRONT_MATTER":
+                    continue
+                if block["page"] not in early_pages:
+                    continue
+                word_count = len(block["text"].split())
+                if word_count < 50:
+                    llm_candidates.append(i)
+
+            llm_filtered = 0
+            if llm_candidates:
+                print(f"  🔍 Post-filter LLM: checking {len(llm_candidates)} "
+                      f"short block(s) on pages {sorted(early_pages)}")
+                for idx in llm_candidates:
+                    block = labeled_blocks[idx]
+                    sys_p, usr_p = build_block_metadata_prompt(block["text"])
+                    response = llm.generate(
+                        prompt=usr_p, system_prompt=sys_p, temperature=0.0,
+                    )
+                    verdict_match = _re_blk.search(
+                        r'"verdict"\s*:\s*"(metadata|content)"', response
+                    )
+                    if verdict_match and verdict_match.group(1) == "metadata":
+                        block["section_type"] = "FRONT_MATTER"
+                        llm_filtered += 1
+                        print(f"       Block {idx} (page {block['page']}): "
+                              f"metadata → removed")
+
+            total_filtered = regex_filtered + llm_filtered
+            if total_filtered:
+                print(f"  ✅ Post-filter total: {total_filtered} metadata block(s) "
+                      f"removed ({regex_filtered} regex, {llm_filtered} LLM)")
 
             # Paddle path: use labeled blocks directly — no LLM classification needed
             from src.chunker import create_chunks_from_blocks, get_chunk_stats
@@ -699,49 +917,45 @@ Options:
         print(f"     ⚠️  Drift: {_simp_para_count - _input_para_count:+d} paragraphs")
 
     # ── Step 5b: Embedding QA ────────────────────────────────────────────────
-    # Skip in strict paddle mode — paragraph integrity is guaranteed by construction
-    if use_paddle:
-        print("\n  ℹ️  Embedding QA skipped (strict paddle mode — paragraph integrity guaranteed)")
-    else:
-        from src.embedding_qa import is_available as embedding_available, run_embedding_qa
-        if embedding_available():
-            print("\n  🔬 Running embedding-based quality check...")
-            # Reload checkpoint for embedding QA
-            with open(CHECKPOINT_FILE, "r") as f:
-                eq_checkpoint = json.load(f)
-            eq_result = run_embedding_qa(chunks, eq_checkpoint)
-            print(f"     Checked: {eq_result['total_checked']} chunks")
-            print(f"     Avg semantic similarity: {eq_result['avg_similarity']:.2%}")
-            if eq_result["flagged_chunks"]:
-                print(f"     ⚠️  {len(eq_result['flagged_chunks'])} chunks flagged (low similarity):")
-                for cid, score in eq_result["flagged_chunks"][:5]:
-                    print(f"        Chunk {cid}: {score:.2%}")
+    from src.embedding_qa import is_available as embedding_available, run_embedding_qa
+    if embedding_available():
+        print("\n  🔬 Running embedding-based quality check...")
+        # Reload checkpoint for embedding QA
+        with open(CHECKPOINT_FILE, "r") as f:
+            eq_checkpoint = json.load(f)
+        eq_result = run_embedding_qa(chunks, eq_checkpoint)
+        print(f"     Checked: {eq_result['total_checked']} chunks")
+        print(f"     Avg semantic similarity: {eq_result['avg_similarity']:.2%}")
+        if eq_result["flagged_chunks"]:
+            print(f"     ⚠️  {len(eq_result['flagged_chunks'])} chunks flagged (low similarity):")
+            for cid, score in eq_result["flagged_chunks"][:5]:
+                print(f"        Chunk {cid}: {score:.2%}")
 
-                # Run targeted correction pass on flagged chunks
-                from src.simplifier import run_correction_pass
-                correction_threshold = 0.60
-                needs_correction = [(cid, s) for cid, s in eq_result["flagged_chunks"] if s < correction_threshold]
-                if needs_correction:
-                    print(f"\n  🔧 Running correction pass on {len(needs_correction)} chunk(s) below {correction_threshold:.0%}...")
-                    improved = run_correction_pass(
-                        chunks=chunks,
-                        output_chunks=output_chunks,
-                        flagged_chunks=needs_correction,
-                        llm=llm,
-                        checkpoint_path=CHECKPOINT_FILE,
-                        similarity_threshold=correction_threshold,
-                    )
-                    if improved > 0:
-                        print(f"     ✅ Improved {improved} chunk(s)")
-                        # Save updated chunks
-                        with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
-                            json.dump(output_chunks, f, ensure_ascii=False, indent=2)
-                    else:
-                        print(f"     ℹ️  No chunks could be improved")
-            else:
-                print(f"     ✅ All chunks pass semantic similarity check")
+            # Run targeted correction pass on flagged chunks
+            from src.simplifier import run_correction_pass
+            correction_threshold = 0.75
+            needs_correction = [(cid, s) for cid, s in eq_result["flagged_chunks"] if s < correction_threshold]
+            if needs_correction:
+                print(f"\n  🔧 Running correction pass on {len(needs_correction)} chunk(s) below {correction_threshold:.0%}...")
+                improved = run_correction_pass(
+                    chunks=chunks,
+                    output_chunks=output_chunks,
+                    flagged_chunks=needs_correction,
+                    llm=llm,
+                    checkpoint_path=CHECKPOINT_FILE,
+                    similarity_threshold=correction_threshold,
+                )
+                if improved > 0:
+                    print(f"     ✅ Improved {improved} chunk(s)")
+                    # Save updated chunks
+                    with open(SIMPLIFIED_CHUNKS_FILE, "w") as f:
+                        json.dump(output_chunks, f, ensure_ascii=False, indent=2)
+                else:
+                    print(f"     ℹ️  No chunks could be improved")
         else:
-            print("\n  ℹ️  Embedding QA skipped (install sentence-transformers for semantic checks)")
+            print(f"     ✅ All chunks pass semantic similarity check")
+    else:
+        print("\n  ℹ️  Embedding QA skipped (install sentence-transformers for semantic checks)")
 
     # ── Step 8: Footnotes ─────────────────────────────────────────────────────
     _step("8/10", "Footnote Generation")
